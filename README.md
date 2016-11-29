@@ -4,31 +4,9 @@ Lua support for https://github.com/aptise/peter_sslers Certificate Manager in Op
 
 # Status
 
-Beta but Production ready.
-
-# API
-
-* [new](#name)
-* [connect](#connect)
-* [set_timeout](#set_timeout)
-* [ssl_handshake](#ssl_handshake)
-* [set_keepalive](#set_keepalive)
-* [get_reused_times](#get_reused_times)
-* [close](#close)
-* [request](#request)
-* [request_uri](#request_uri)
-* [request_pipeline](#request_pipeline)
-* [Response](#response)
-    * [body_reader](#resbody_reader)
-    * [read_body](#resread_body)
-    * [read_trailes](#resread_trailers)
-* [Proxy](#proxy)
-    * [proxy_request](#proxy_request)
-    * [proxy_response](#proxy_response)
-* [Utility](#utility)
-    * [parse_uri](#parse_uri)
-    * [get_client_body_reader](#get_client_body_reader)
-
+TESTING
+this is currently being repackaged and should not be used from OPM
+ALMOST Production ready.
 
 ## Synopsis
 

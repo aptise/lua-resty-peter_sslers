@@ -1,9 +1,11 @@
 -- The includes
 -- we may not need resty.http, but including it here is better for memory if we need it
 local cjson = require "cjson"
-local http = require "resty.http"
 local redis = require "resty.redis"
 local ssl = require "ngx.ssl"
+
+-- this is the pintsized library
+local http = require "resty.http"
 
 -- ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~
 -- alias functions
