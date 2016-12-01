@@ -56,15 +56,19 @@ Make sure your nginx contains:
 This is very simple, it merely specfies a cache, duration, and prime_version
 
 ````
-	local ssl_certhandler = require "ssl_certhandler"
+	-- requirements
+	local ssl_certhandler = require "peter_sslers.ssl_certhandler"
+
+	-- alias functions
+	local ssl_certhandler_set = ssl_certhandler.set_ssl_certificate
 
 	-- Local cache related
 	local cert_cache = ngx.shared.cert_cache
 	local cert_cache_duration = 7200 -- 2 hours
 
 	local prime_version = 1
-    local fallback_server = 'http://0.0.0.0:6543'
-	ssl_certhandler.set_ssl_certificate(cert_cache, cert_cache_duration, prime_version, fallback_server)
+	local fallback_server = 'http://0.0.0.0:6543'
+	ssl_certhandler_set(cert_cache, cert_cache_duration, prime_version, fallback_server)
 
 	return
 ````
@@ -79,35 +83,38 @@ invoked within nginx...
 	}
 ````
 
+or use it as-is:
+
+````
+	ssl_certificate_by_lua_block  {
+		require "peter_sslers.ssl_certhandler-lookup"
+		return
+	}
+````
+
 
 ### ssl_certhandler-expire.lua
 
 The nginx shared memory cache persists across configuration reloads.  Servers must be fully restarted to clear memory.
 
-The workaround?  API endpoints to "flush" the cache or expire certain keys(domains):
+The workaround?  API endpoints to "flush" the cache or expire certain keys(domains).
 
-````
-	local ssl_certhandler = require "ssl_certhandler"
-
-	-- Local cache related
-	local cert_cache = ngx.shared.cert_cache
-
-	ssl_certhandler.expire_ssl_certs(cert_cache)
-````
-
-invoked within nginx
+A simple example is provided with `peter_sslers.ssl_certhandler-expire`,  which can be invoked within nginx as-is rather easily:
 
 ````
     server {
         listen 443 default_server;
         ...
-	    location /ngxadmin/shared_cache/expire {
-			content_by_lua_file /path/to/ssl_certhandler-expire.lua;
-	    }
+        location  /ngxadmin/shared_cache/expire  {
+            content_by_lua_block  {
+                require "peter_sslers.ssl_certhandler-expire"
+                return
+            }
+        }
 	}
 ````
 	
-This creates the following routes:
+This expire tool creates the following routes:
 
 * `/ngxadmin/shared_cache/expire/all`
 ** Flushes the entire nginx certificate cache

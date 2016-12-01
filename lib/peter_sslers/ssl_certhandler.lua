@@ -19,10 +19,10 @@ local ngx_NOTICE = ngx.NOTICE
 local ngx_null = ngx.null
 local ngx_say = ngx.say
 local ngx_var = ngx.var
-local ssl_cert_pem_to_der = ssl.cert_pem_to_der
 local ssl_clear_certs = ssl.clear_certs
-local ssl_priv_key_pem_to_der = ssl.priv_key_pem_to_der
 local ssl_server_name = ssl.server_name
+local ssl_cert_pem_to_der = ssl.cert_pem_to_der
+local ssl_priv_key_pem_to_der = ssl.priv_key_pem_to_der
 local ssl_set_der_cert = ssl.set_der_cert
 local ssl_set_der_priv_key = ssl.set_der_priv_key
 
