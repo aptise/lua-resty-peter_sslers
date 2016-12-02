@@ -6,6 +6,12 @@ Lua support for https://github.com/aptise/peter_sslers Certificate Manager in Op
 
 This package is almost production-ready.
 
+# Installation
+
+one line...
+
+    sudo opm install aptise/peter_sslers-lua-resty
+
 ## Synopsis
 
 `lua-resty-peter_sslers` is a library that can be used in an openresty/nginx environment to dynamically serve the correct SSL certificate for a given domain.
