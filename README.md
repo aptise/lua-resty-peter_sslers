@@ -4,9 +4,7 @@ Lua support for https://github.com/aptise/peter_sslers Certificate Manager in Op
 
 # Status
 
-TESTING
-this is currently being repackaged and should not be used from OPM
-ALMOST Production ready.
+This package is almost production-ready.
 
 ## Synopsis
 
@@ -14,12 +12,14 @@ ALMOST Production ready.
 
 It supports both the prime cache types 1 & 2 of `peter_sslers`
 
-It is implemented as a library with 2 example scripts to invoke it.
+It is implemented as a library with some example scripts to invoke it.
 
-* `ssl_certhandler.lua`
-* `ssl_certhandler-lookup.lua`
-* `ssl_certhandler-expire.lua`
-* `ssl_certhandler-status.lua`
+* core library
+  * `ssl_certhandler.lua`
+* examples
+  * `ssl_certhandler-lookup.lua`
+  * `ssl_certhandler-expire.lua`
+  * `ssl_certhandler-status.lua`
 
 The `-lookup.lua`, `-expire.lua`,  `-status.lua` scripts can be copied into a block.  
 
@@ -76,9 +76,9 @@ Make sure your nginx contains:
 
 * `initialize` currently does nothing.
 * `initialize_worker` accepts three arguments:
-** `cert_cache_duration` seconds for PEM cache in ngx.shared.DICT
-** `lru_cache_duration` seconds for LRU cache of cdata pointer in worker
-** `lru_maxitems` max number of items for LRU cache of cdata pointer in worker
+  * `cert_cache_duration` seconds for PEM cache in ngx.shared.DICT
+  * `lru_cache_duration` seconds for LRU cache of cdata pointer in worker
+  * `lru_maxitems` max number of items for LRU cache of cdata pointer in worker
 
 Then implement the examples routes
 
