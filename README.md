@@ -19,8 +19,9 @@ It is implemented as a library with 2 example scripts to invoke it.
 * `ssl_certhandler.lua`
 * `ssl_certhandler-lookup.lua`
 * `ssl_certhandler-expire.lua`
+* `ssl_certhandler-status.lua`
 
-The `-lookup.lua` and `-expire.lua` scripts can set via `_by_lua_file` or copied into a block.  
+The `-lookup.lua`, `-expire.lua`,  `-status.lua` scripts can be copied into a block.  
 
 The library is hardcoded to use db9 in redis.  if you want another option, edit or PR a fix on the line that looks like:
 
@@ -41,6 +42,8 @@ Hits and misses from the fallback API will be cached in the shared cache dict.  
 
 Core library.  Exposes several functions.
 
+## Usage
+
 Make sure your nginx contains:
 
 ````
@@ -50,28 +53,14 @@ Make sure your nginx contains:
 	}
 ````
 
+Then implement one (or both) of the examples.
 
-### ssl_certhandler-lookup.lua
+Due to an implementation detail of lua/luajit, the examples below must be implemented in a block/file and can not be "require(/path/to/example)".  This is because of how the redis connection is instantiated.  (see https://github.com/openresty/lua-resty-redis/issues/33 https://github.com/openresty/lua-nginx-module/issues/376 )
+
+
+### examples/ssl_certhandler-lookup.lua
 
 This is very simple, it merely specfies a cache, duration, and prime_version
-
-````
-	-- requirements
-	local ssl_certhandler = require "peter_sslers.ssl_certhandler"
-
-	-- alias functions
-	local ssl_certhandler_set = ssl_certhandler.set_ssl_certificate
-
-	-- Local cache related
-	local cert_cache = ngx.shared.cert_cache
-	local cert_cache_duration = 7200 -- 2 hours
-
-	local prime_version = 1
-	local fallback_server = 'http://0.0.0.0:6543'
-	ssl_certhandler_set(cert_cache, cert_cache_duration, prime_version, fallback_server)
-
-	return
-````
 
 invoked within nginx...
 
@@ -79,21 +68,14 @@ invoked within nginx...
     server {
         listen 443 default_server;
         ...
-		ssl_certificate_by_lua_file /path/to/ssl_certhandler-lookup.lua;
-	}
+        // nginx must have a default configured
+        ssl_certificate /path/to/default/fullchain.pem;
+        ssl_certificate_key /path/to/default/privkey.pem;
+		ssl_certificate_by_lua_block  {
+		}
 ````
 
-or use it as-is:
-
-````
-	ssl_certificate_by_lua_block  {
-		require "peter_sslers.ssl_certhandler-lookup"
-		return
-	}
-````
-
-
-### ssl_certhandler-expire.lua
+### examples/ssl_certhandler-expire.lua
 
 The nginx shared memory cache persists across configuration reloads.  Servers must be fully restarted to clear memory.
 
@@ -107,13 +89,11 @@ A simple example is provided with `peter_sslers.ssl_certhandler-expire`,  which 
         ...
         location  /ngxadmin/shared_cache/expire  {
             content_by_lua_block  {
-                require "peter_sslers.ssl_certhandler-expire"
-                return
-            }
+			}
         }
 	}
 ````
-	
+
 This expire tool creates the following routes:
 
 * `/ngxadmin/shared_cache/expire/all`
@@ -130,6 +110,24 @@ On success, these routes return JSON in a HTTP-200-OK document.
 On error, these routes should generate a bad status code.
 
 The Pyramid component can query these endpoints automatically for you.
+
+
+### examples/ssl_certhandler-status.lua
+
+The status route shows some info about the system
+
+````
+    server {
+        listen 443 default_server;
+        ...
+        location  /ngxadmin/shared_cache/status  {
+            content_by_lua_block  {
+            }
+        }
+	}
+````
+	
+
 
 ### Details
 
@@ -160,6 +158,11 @@ The logic in pseudocode:
 	ssl.set_der_cert(cert)
 	ssl.set_der_priv_key(key)
 ````
+
+
+### Known problems
+
+This library uses the nginx shared dict, and must 
 
 
 # Author
