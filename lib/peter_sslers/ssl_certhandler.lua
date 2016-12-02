@@ -66,9 +66,9 @@ function initialize_worker(_cert_cache_duration, _lru_cache_duration, _lru_maxit
     lru_cache_duration = _lru_cache_duration or lru_cache_duration
     lru_maxitems = _lru_maxitems or lru_maxitems
     
-    ngx_log(ngx_ERR, "cert_cache_duration ", cert_cache_duration)
-    ngx_log(ngx_ERR, "lru_maxitems ", lru_maxitems)
-    ngx_log(ngx_ERR, "lru_cache_duration ", lru_cache_duration)
+    ngx_log(ngx_NOTICE, "ssl_certhandler.initialize_worker | cert_cache_duration ", cert_cache_duration)
+    ngx_log(ngx_NOTICE, "ssl_certhandler.initialize_worker | lru_maxitems ", lru_maxitems)
+    ngx_log(ngx_NOTICE, "ssl_certhandler.initialize_worker | lru_cache_duration ", lru_cache_duration)
 
 	-- init the cache
 	cert_lrucache = lrucache.new(lru_maxitems) 
@@ -216,15 +216,15 @@ function prime_1__query_redis(redcon, _server_name)
     local key_domain = "d:" .. _server_name
     local domain_data, err = redcon:hmget(key_domain, 'c', 'p', 'i')
     if domain_data == nil then
-        ngx_log(ngx_NOTICE, "`nil` failed to retreive certificates for domain(", key_domain, ") Err: ", err)
+        ngx_log(ngx_DEBUG, "`nil` failed to retreive certificates for domain(", key_domain, ") Err: ", err)
         return nil
     end
     if domain_data == ngx_null then
-        ngx_log(ngx_NOTICE, "`ngx_null` failed to retreive certificates for domain(", key_domain, ") Err: ", err)
+        ngx_log(ngx_DEBUG, "`ngx_null` failed to retreive certificates for domain(", key_domain, ") Err: ", err)
         return nil
     end    
-    -- ngx_log(ngx_NOTICE, 'err ', err)
-    -- ngx_log(ngx_NOTICE, 'domain_data ', tostring(domain_data))
+    -- ngx_log(ngx_DEBUG, 'err ', err)
+    -- ngx_log(ngx_DEBUG, 'domain_data ', tostring(domain_data))
 
     -- lua arrays are 1 based!
     local id_cert = domain_data[1]
@@ -238,25 +238,25 @@ function prime_1__query_redis(redcon, _server_name)
 	-- ngx_log(ngx_DEBUG, "id_cacert ", id_cacert)
     
     if id_cert == ngx_null or id_pkey == ngx_null or id_cacert == ngx_null then
-        ngx_log(ngx_NOTICE, "`id_cert == ngx_null or id_pkey == ngx_null or id_cacert == ngx_null for domain(", key_domain, ")")
+        ngx_log(ngx_DEBUG, "`id_cert == ngx_null or id_pkey == ngx_null or id_cacert == ngx_null for domain(", key_domain, ")")
         return nil
     end
     
     local pkey, err = redcon:get('p'..id_pkey)
     if pkey == nil then
-        ngx_log(ngx_NOTICE, "failed to retreive pkey (", id_pkey, ") for domain (", key_domain, ") Err: ", err)
+        ngx_log(ngx_DEBUG, "failed to retreive pkey (", id_pkey, ") for domain (", key_domain, ") Err: ", err)
         return nil
     end
 
     local cert, err = redcon:get('c'..id_cert)
     if cert == nil or cert == ngx_null then
-        ngx_log(ngx_NOTICE, "failed to retreive certificate (", id_cert, ") for domain (", key_domain, ") Err: ", err)
+        ngx_log(ngx_DEBUG, "failed to retreive certificate (", id_cert, ") for domain (", key_domain, ") Err: ", err)
         return nil
     end
 
     local cacert, err = redcon:get('i'..id_cacert)
     if cacert == nil or cacert == ngx_null then
-        ngx_log(ngx_NOTICE, "failed to retreive ca certificate (", id_cacert, ") for domain (", key_domain, ") Err: ", err)
+        ngx_log(ngx_DEBUG, "failed to retreive ca certificate (", id_cacert, ") for domain (", key_domain, ") Err: ", err)
         return nil
     end
     
@@ -273,11 +273,11 @@ function prime_2__query_redis(redcon, _server_name)
     local key_domain = _server_name
     local domain_data, err = redcon:hmget(key_domain, 'p', 'f')
     if domain_data == nil then
-        ngx_log(ngx_NOTICE, "`nil` failed to retreive certificates for domain(", key_domain, ") Err: ", err)
+        ngx_log(ngx_DEBUG, "`nil` failed to retreive certificates for domain(", key_domain, ") Err: ", err)
         return nil
     end
     if domain_data == ngx_null then
-        ngx_log(ngx_NOTICE, "`ngx_null` failed to retreive certificates for domain(", key_domain, ") Err: ", err)
+        ngx_log(ngx_DEBUG, "`ngx_null` failed to retreive certificates for domain(", key_domain, ") Err: ", err)
         return nil
     end    
 
@@ -285,7 +285,7 @@ function prime_2__query_redis(redcon, _server_name)
     local fullchain = domain_data[2]
 
     if pkey == ngx_null or fullchain == ngx_null then
-        ngx_log(ngx_NOTICE, "`pkey == ngx_null or fullchain == ngx_null for domain(", key_domain, ")")
+        ngx_log(ngx_DEBUG, "`pkey == ngx_null or fullchain == ngx_null for domain(", key_domain, ")")
         return nil
     end
     
@@ -302,11 +302,11 @@ function query_api_upstream(fallback_server, server_name)
     local httpc = http_new()
 
     local data_uri = fallback_server.."/.well-known/admin/domain/"..server_name.."/config.json?openresty=1"
-    ngx_log(ngx_NOTICE, "querysing upstream API server at: ", data_uri)
+    ngx_log(ngx_DEBUG, "querysing upstream API server at: ", data_uri)
     local response, err = httpc:request_uri(data_uri, {method = "GET", })
 
     if not response then
-        ngx_log(ngx_NOTICE, 'API upstream - no response')
+        ngx_log(ngx_ERR, 'API upstream - no response')
     else 
         local status = response.status
         -- local headers = response.headers
@@ -322,13 +322,13 @@ function query_api_upstream(fallback_server, server_name)
                 pkey = body_value['server_certificate__latest_single']['private_key']['pem']
             end
         else
-            ngx_log(ngx_NOTICE, 'API upstream - bad response: ', status)
+            ngx_log(ngx_ERR, 'API upstream - bad response: ', status)
         end
     end
     if cert ~= nil and key ~= nil then
-        ngx_log(ngx_NOTICE, "API cache HIT for: ", server_name)
+        ngx_log(ngx_DEBUG, "API cache HIT for: ", server_name)
     else
-        ngx_log(ngx_NOTICE, "API cache MISS for: ", server_name)
+        ngx_log(ngx_DEBUG, "API cache MISS for: ", server_name)
     end
 
     local certificate_pem = certificate_pairing()
@@ -354,13 +354,13 @@ function set_ssl_certificate(prime_method, fallback_server)
 
     -- Check for SNI request.
     if server_name == nil then
-        ngx_log(ngx_NOTICE, "SNI Not present - performing IP lookup ")
+        ngx_log(ngx_DEBUG, "SNI Not present - performing IP lookup ")
     
         -- don't bother with IP lookups
         -- exit out and just fall back on the default ssl cert
         return
     end 
-    ngx_log(ngx_NOTICE, "SNI Lookup for: ", server_name)
+    ngx_log(ngx_DEBUG, "SNI Lookup for: ", server_name)
     
     -- check worker lru cache first
     -- this stashes an actual cert
@@ -370,9 +370,9 @@ function set_ssl_certificate(prime_method, fallback_server)
     local certificate_pem = nil
     
     if certificate_pairing_validate(certificate_cdata) then
-        ngx_log(ngx_NOTICE, "cert_lrucache HIT for: ", server_name)
+        ngx_log(ngx_DEBUG, "cert_lrucache HIT for: ", server_name)
         if has_certificate_failmarker(certificate_cdata) then
-            ngx_log(ngx_NOTICE, "Previously seen unsupported domain")
+            ngx_log(ngx_DEBUG, "Previously seen unsupported domain")
             -- don't bother with IP lookups
             -- exit out and just fall back on the default ssl cert
             return
@@ -383,9 +383,9 @@ function set_ssl_certificate(prime_method, fallback_server)
 		-- check the nginx shared cache for certficate
     	certificate_pem = get_cert_sharedcache(server_name)
 		if certificate_pairing_validate(certificate_pem) then
-			ngx_log(ngx_NOTICE, "shared `cert_cache` HIT for: ", server_name)
+			ngx_log(ngx_DEBUG, "shared `cert_cache` HIT for: ", server_name)
 	        if has_certificate_failmarker(certificate_pem) then
-				ngx_log(ngx_NOTICE, "Previously seen unsupported domain in ngx.shared.DICT")
+				ngx_log(ngx_DEBUG, "Previously seen unsupported domain in ngx.shared.DICT")
 				-- cache onto the worker's lru cache
 				set_failmarker_lrucache(server_name)
 
@@ -393,25 +393,25 @@ function set_ssl_certificate(prime_method, fallback_server)
 				return
 			end
 		else
-			ngx_log(ngx_NOTICE, "shared `cert_cache` MISS for: ", server_name)
+			ngx_log(ngx_DEBUG, "shared `cert_cache` MISS for: ", server_name)
 
 			-- our upstream providers will return a `certificate_pairing()` or `nil` value
 			-- certificate_pem will be our main focus
 		
 			if prime_method ~= nil then
 				-- ok, try to get it from redis
-				ngx_log(ngx_NOTICE, "Redis: lookup enabled")
+				ngx_log(ngx_DEBUG, "Redis: lookup enabled")
 			
 				local allowed_prime_methods = {1, 2, }
 				if not allowed_prime_methods[prime_method] then
-					ngx_log(ngx_NOTICE, "Redis: invalid `prime_method` not (1, 2) is `", prime_method, "`")
+					ngx_log(ngx_ERR, "Redis: invalid `prime_method` not (1, 2) is `", prime_method, "`")
 					return
 				end
 
 				-- grab redis connection
 				local redcon, err = get_redcon()
 				if redcon == nil then
-					ngx_log(ngx_NOTICE, "Redis: could not get connection")
+					ngx_log(ngx_ERR, "Redis: could not get connection")
 					-- exit out and just fall back on the default ssl cert
 					return
 				end
@@ -430,7 +430,7 @@ function set_ssl_certificate(prime_method, fallback_server)
 			-- use a fallback search?
 			if fallback_server ~= nil then
 				if not certificate_pairing_validate(certificate_pem) then
-					ngx_log(ngx_NOTICE, "Upstream API: lookup enabled")
+					ngx_log(ngx_DEBUG, "Upstream API: lookup enabled")
 					certificate_pem = query_api_upstream(fallback_server, server_name)
 				end
 			end
@@ -440,7 +440,7 @@ function set_ssl_certificate(prime_method, fallback_server)
 			if certificate_pairing_validate(certificate_pem) then
 				set_cert_sharedcache(server_name, certificate_pem)
 			else
-				ngx_log(ngx_NOTICE, "Failed to retrieve PEM for ", server_name)
+				ngx_log(ngx_DEBUG, "Failed to retrieve PEM for ", server_name)
 
 				-- set a fail marker - SHARED cache
 				set_failmarker_sharedcache(server_name)
