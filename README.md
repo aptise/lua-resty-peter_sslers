@@ -124,16 +124,20 @@ A simple example is provided with `peter_sslers.ssl_certhandler-expire`,  which 
     server {
         listen 443 default_server;
         ...
-        location  /ngxadmin/shared_cache/expire  {
-            content_by_lua_block  {
-                -- requirements
-                local ssl_certhandler = require "peter_sslers.ssl_certhandler"
+        location  /.ngxadmin  {
+            auth_basic  "ngxadmin";
+            auth_basic_user_file  /path/to/ngxadmin.htpasswd;
+			location  /.ngxadmin/shared_cache/expire  {
+				content_by_lua_block  {
+					-- requirements
+					local ssl_certhandler = require "peter_sslers.ssl_certhandler"
 
-                -- alias functions
-                local ssl_certhandler_expire = ssl_certhandler.expire_ssl_certs
-                ssl_certhandler_expire()
+					-- alias functions
+					local ssl_certhandler_expire = ssl_certhandler.expire_ssl_certs
+					ssl_certhandler_expire()
+				}
 			}
-        }
+		}
 	}
 ````
 
@@ -163,16 +167,20 @@ The status route shows some info about the system
     server {
         listen 443 default_server;
         ...
-        location  /ngxadmin/shared_cache/status  {
-            content_by_lua_block  {
-                -- requirements
-                local ssl_certhandler = require "peter_sslers.ssl_certhandler"
+        location  /.ngxadmin  {
+            auth_basic  "ngxadmin";
+            auth_basic_user_file  /path/to/ngxadmin.htpasswd;
+			location  /.ngxadmin/shared_cache/status  {
+				content_by_lua_block  {
+					-- requirements
+					local ssl_certhandler = require "peter_sslers.ssl_certhandler"
 
-                -- alias functions
-                local ssl_certhandler_status = ssl_certhandler.status_ssl_certs
-                ssl_certhandler_status()
-            }
-        }
+					-- alias functions
+					local ssl_certhandler_status = ssl_certhandler.status_ssl_certs
+					ssl_certhandler_status()
+				}
+			}
+		}
 	}
 ````
 	
