@@ -124,10 +124,10 @@ A simple example is provided with `peter_sslers.ssl_certhandler-expire`,  which 
     server {
         listen 443 default_server;
         ...
-        location  /.ngxadmin  {
-            auth_basic  "ngxadmin";
-            auth_basic_user_file  /path/to/ngxadmin.htpasswd;
-			location  /.ngxadmin/shared_cache/expire  {
+        location  /.peter_sslers  {
+            auth_basic  "peter_sslers-nginx";
+            auth_basic_user_file  /path/to/peter_sslers-nginx.htpasswd;
+			location  /.peter_sslers/nginx/shared_cache/expire  {
 				content_by_lua_block  {
 					-- requirements
 					local ssl_certhandler = require "peter_sslers.ssl_certhandler"
@@ -143,9 +143,9 @@ A simple example is provided with `peter_sslers.ssl_certhandler-expire`,  which 
 
 This expire tool creates the following routes:
 
-* `/ngxadmin/shared_cache/expire/all`
+* `/peter_sslers/nginx/shared_cache/expire/all`
 ** Flushes the entire nginx certificate cache
-* `/ngxadmin/shared_cache/expire/domain/{DOMAIN}`
+* `/peter_sslers/nginx/shared_cache/expire/domain/{DOMAIN}`
 ** Flushes the domain's pkey & chain entires in the certificate cache
 
 On success, these routes return JSON in a HTTP-200-OK document.
@@ -167,10 +167,10 @@ The status route shows some info about the system
     server {
         listen 443 default_server;
         ...
-        location  /.ngxadmin  {
-            auth_basic  "ngxadmin";
-            auth_basic_user_file  /path/to/ngxadmin.htpasswd;
-			location  /.ngxadmin/shared_cache/status  {
+        location  /.peter_sslers/nginx  {
+            auth_basic  "peter_sslers-nginx";
+            auth_basic_user_file  /path/to/peter_sslers-nginx.htpasswd;
+			location  /.peter_sslers/nginx/shared_cache/status  {
 				content_by_lua_block  {
 					-- requirements
 					local ssl_certhandler = require "peter_sslers.ssl_certhandler"
@@ -202,6 +202,10 @@ This the core work:
         }
 ````
 
+
+### fully configured example
+
+a fully configured example is available in the main peter_sslers repo: https://github.com/aptise/peter_sslers/blob/master/tools/nginx_conf/enabled.conf
 
 ### Details
 
