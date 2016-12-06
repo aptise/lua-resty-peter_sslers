@@ -75,7 +75,7 @@ Make sure your nginx contains:
 			require "resty.core"
 			local ssl_certhandler = require "peter_sslers.ssl_certhandler"
 			-- cert_cache_duration, lru_cache_duration, lru_maxitems
-			ssl_certhandler.initialize_worker(9, 3, 200)
+			ssl_certhandler.initialize_worker(90, 30, 200)
 		}
 	}
 ````
@@ -197,7 +197,7 @@ This the core work:
             local ssl_certhandler_set = ssl_certhandler.set_ssl_certificate
 
             local prime_version = 1
-            local fallback_server = 'http://0.0.0.0:6543'
+            local fallback_server = 'http://0.0.0.0:6543/.well-known/admin'
             ssl_certhandler_set(prime_version, fallback_server)
         }
 ````
@@ -247,6 +247,36 @@ The logic in pseudocode:
 	if valid(cert_cdata):
 		set_ssl_certificate(cert_cdata)
 ````
+
+
+### Integration/Debugging HowTo
+
+Various levels of information are sent to the following debug levels of nginx.  Changing the nginx debug level will expose more data
+
+* ERR
+* NOTICE
+* DEBUG
+
+Notice how a worker is initialized:
+
+	-- cert_cache_duration, lru_cache_duration, lru_maxitems
+	ssl_certhandler.initialize_worker(90, 30, 100)
+	
+For debugging you may want to lower these to shorten the LRU cache to a negligible number
+
+	ssl_certhandler.initialize_worker(5, 1, 100)
+	
+The "/status" and "/expire" routes only show information in the shared cache -- information is cached into each worker's own LRU cache and is not available to these routes.  If "/expire" is used, a domain will be removed from the shared cache and "/status" route... but may still be in a worker's LRU.
+
+
+Check the status:
+
+	curl -k https://peter:sslers@127.0.0.1/.peter_sslers/nginx/shared_cache/status
+
+expire
+	curl -k https://peter:sslers@127.0.0.1/.peter_sslers/nginx/shared_cache/expire
+	
+	
 
 
 ### Known problems

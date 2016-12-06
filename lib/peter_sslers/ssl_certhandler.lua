@@ -1,6 +1,6 @@
 -- The includes
 -- we may not need resty.http, but including it here is better for memory if we need it
-local cjson = require "cjson"
+local cjson_safe = require "cjson.safe"
 local lrucache = require "resty.lrucache"
 local redis = require "resty.redis"
 local ssl = require "ngx.ssl"
@@ -10,8 +10,8 @@ local http = require "resty.http"
 
 -- ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~
 -- alias functions
-local cjson_decode = cjson.decode
-local cjson_null = cjson.null
+local cjson_safe_decode = cjson_safe.decode
+local cjson_null = cjson_safe.null
 local http_new = http.new
 local ngx_DEBUG = ngx.DEBUG
 local ngx_ERR = ngx.ERR
@@ -22,12 +22,6 @@ local ngx_say = ngx.say
 local ngx_var = ngx.var
 local ssl_clear_certs = ssl.clear_certs
 local ssl_server_name = ssl.server_name
-
--- these use nginx.shared.DICT to store PEM data across workers
--- local ssl_cert_pem_to_der = ssl.cert_pem_to_der
--- local ssl_priv_key_pem_to_der = ssl.priv_key_pem_to_der
--- local ssl_set_der_cert = ssl.set_der_cert
--- local ssl_set_der_priv_key = ssl.set_der_priv_key
 
 -- these use cdata pointers, so must use lrucache to share within the worker
 local ssl_parse_pem_cert = ssl.parse_pem_cert
@@ -43,7 +37,6 @@ local cert_cache = ngx.shared.cert_cache
 -- note that this is a WORKER cache
 local cert_lrucache = nil
 
-
 -- cert_cache_duration is for the shared dict; misses fall back onto Redis/PeterSslers
 -- cert_cache can be emptied via the api
 local cert_cache_duration = 600
@@ -51,7 +44,6 @@ local cert_cache_duration = 600
 -- lru must timeout
 local lru_cache_duration = 60
 local lru_maxitems = 200  -- allow up to 200 items in the cache
-
 
 
 function initialize()
@@ -75,6 +67,7 @@ function initialize_worker(_cert_cache_duration, _lru_cache_duration, _lru_maxit
 	if not cert_lrucache then
 		return error("failed to create the cache: " .. (err or "unknown"))
 	end
+	return true
 end
 
 
@@ -149,9 +142,9 @@ function set_cert_sharedcache(server_name, certificate_pem)
 	-- Add key and cert to the SHARED cache
 	ngx_log(ngx_DEBUG, "Caching PEM cert & key into the shared cache >")
 	-- these 'set' functions have a return value
-	local success, err, forcible = cert_cache:set(server_name .. ":c", certificate_pem['cert'])
+	local success, err, forcible = cert_cache:set(server_name .. ":c", certificate_pem['cert'], cert_cache_duration)
 	ngx_log(ngx_DEBUG, "Caching certificate_pem[cert] | success: ", success, " Err: ",  err)
-	local success, err, forcible = cert_cache:set(server_name .. ":k", certificate_pem['pkey'])
+	local success, err, forcible = cert_cache:set(server_name .. ":k", certificate_pem['pkey'], cert_cache_duration)
 	ngx_log(ngx_DEBUG, "Caching certificate_pem[pkey] | success: ", success, " Err: ",  err)
 	ngx_log(ngx_DEBUG, "< success")
 end
@@ -301,7 +294,7 @@ function query_api_upstream(fallback_server, server_name)
     local cert, pkey
     local httpc = http_new()
 
-    local data_uri = fallback_server.."/.well-known/admin/domain/"..server_name.."/config.json?openresty=1"
+    local data_uri = fallback_server.."/domain/"..server_name.."/config.json?openresty=1"
     ngx_log(ngx_DEBUG, "querysing upstream API server at: ", data_uri)
     local response, err = httpc:request_uri(data_uri, {method = "GET", })
 
@@ -312,23 +305,33 @@ function query_api_upstream(fallback_server, server_name)
         -- local headers = response.headers
         -- local body = response.body
         if status == 200 then
-            local body_value = cjson_decode(response.body)
-            -- prefer the multi
-            if body_value['server_certificate__latest_multi'] ~= cjson_null then
-                cert = body_value['server_certificate__latest_multi']['fullchain']['pem']
-                pkey = body_value['server_certificate__latest_multi']['private_key']['pem']
-            elseif body_value['server_certificate__latest_single'] ~= cjson_null then
-                cert = body_value['server_certificate__latest_single']['fullchain']['pem']
-                pkey = body_value['server_certificate__latest_single']['private_key']['pem']
+            local body_value, err = cjson_safe_decode(response.body)
+            if body_value ~= nil then
+				-- prefer the multi
+				if body_value['server_certificate__latest_multi'] ~= cjson_null then
+					cert = body_value['server_certificate__latest_multi']['fullchain']['pem']
+					pkey = body_value['server_certificate__latest_multi']['private_key']['pem']
+				elseif body_value['server_certificate__latest_single'] ~= cjson_null then
+					cert = body_value['server_certificate__latest_single']['fullchain']['pem']
+					pkey = body_value['server_certificate__latest_single']['private_key']['pem']
+				end
+			end
+        elseif status == 404 then
+	        ngx_log(ngx_DEBUG, "API upstream 404 for: ", server_name)
+            local body_value, err = cjson_safe_decode(response.body)
+            if body_value ~= nil then
+            	-- we expect a 'message' field
+			    ngx_log(ngx_DEBUG, "API upstream error: ", body_value['message'])
             end
         else
             ngx_log(ngx_ERR, 'API upstream - bad response: ', status)
         end
     end
+    
     if cert ~= nil and key ~= nil then
-        ngx_log(ngx_DEBUG, "API cache HIT for: ", server_name)
+        ngx_log(ngx_DEBUG, "API upstream HIT for: ", server_name)
     else
-        ngx_log(ngx_DEBUG, "API cache MISS for: ", server_name)
+        ngx_log(ngx_DEBUG, "API upstream MISS for: ", server_name)
     end
 
     local certificate_pem = certificate_pairing()
