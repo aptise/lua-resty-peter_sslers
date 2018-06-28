@@ -1,0 +1,15 @@
+0.2.0
+	2018.06.28
+	- renamed package ini name from `peter_sslers-lua-resty` to `lua-resty-peter_sslers` to be inline with current naming conventions
+
+0.1.1
+	2016.12.06
+	- changed `fallback_server` argument to be a full path to the peter_sslers installation
+	- fixed how cert_cache_duration is set
+	- changed cjson to cjson_safe
+	- parsing upstream 404s for a json encoding and 'message' field, logging if possible
+	- now using a custom table to handle cert/pkey as a pairing
+
+0.1
+	2016.11.29
+	- initial release
