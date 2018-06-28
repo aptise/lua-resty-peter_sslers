@@ -10,7 +10,7 @@ This package is almost production-ready.
 
 one line...
 
-    sudo opm install aptise/peter_sslers-lua-resty
+    sudo opm install aptise/lua-resty-peter_sslers
 
 ## Synopsis
 

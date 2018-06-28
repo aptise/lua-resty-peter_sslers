@@ -1,3 +1,7 @@
+0.2.1
+	2018.06.28
+	- renamed repo from `peter_sslers-lua-resty` to `lua-resty-peter_sslers`
+
 0.2.0
 	2018.06.28
 	- renamed package ini name from `peter_sslers-lua-resty` to `lua-resty-peter_sslers` to be inline with current naming conventions
