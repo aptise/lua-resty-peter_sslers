@@ -59,8 +59,8 @@ function initialize_worker(_cert_cache_duration, _lru_cache_duration, _lru_maxit
     lru_maxitems = _lru_maxitems or lru_maxitems
     
     ngx_log(ngx_NOTICE, "ssl_certhandler.initialize_worker | cert_cache_duration ", cert_cache_duration)
-    ngx_log(ngx_NOTICE, "ssl_certhandler.initialize_worker | lru_maxitems ", lru_maxitems)
     ngx_log(ngx_NOTICE, "ssl_certhandler.initialize_worker | lru_cache_duration ", lru_cache_duration)
+    ngx_log(ngx_NOTICE, "ssl_certhandler.initialize_worker | lru_maxitems ", lru_maxitems)
 
 	-- init the cache
 	cert_lrucache = lrucache.new(lru_maxitems) 
@@ -206,6 +206,7 @@ end
 function prime_1__query_redis(redcon, _server_name)
 	-- returns `certificate_pairing()` or `nil`
     -- If the cert isn't in the cache, attept to retrieve from Redis
+    ngx_log(ngx_DEBUG, "prime_1__query_redis", server_name)
     local key_domain = "d:" .. _server_name
     local domain_data, err = redcon:hmget(key_domain, 'c', 'p', 'i')
     if domain_data == nil then
@@ -263,6 +264,7 @@ end
 function prime_2__query_redis(redcon, _server_name)
 	-- returns `certificate_pairing()` or `nil`
     -- If the cert isn't in the cache, attept to retrieve from Redis
+    ngx_log(ngx_DEBUG, "prime_2__query_redis", server_name)
     local key_domain = _server_name
     local domain_data, err = redcon:hmget(key_domain, 'p', 'f')
     if domain_data == nil then
@@ -290,6 +292,8 @@ end
 
 
 function query_api_upstream(fallback_server, server_name)
+    ngx_log(ngx_DEBUG, "query_api_upstream", server_name)
+
 	-- returns `certificate_pairing()` or `nil`
     local cert, pkey
     local httpc = http_new()
@@ -354,6 +358,8 @@ function set_ssl_certificate(prime_method, fallback_server)
 	-- these are PER-WORKER, and may stick around for this long after an update/expire
 
     local server_name = ssl_server_name()
+
+    ngx_log(ngx_DEBUG, "set_ssl_certificate", server_name)
 
     -- Check for SNI request.
     if server_name == nil then
@@ -491,6 +497,7 @@ end
 
 
 function status_ssl_certs()
+    ngx_log(ngx_NOTICE, "status_ssl_certs")
     ngx.header.content_type = 'application/json'
     local prefix = ngx_var.location
 	-- handmade json value    	
@@ -537,13 +544,15 @@ function status_ssl_certs()
 	_ks_invalid = _ks_invalid:sub(1, -2)
 	ks = '{"valid": [' .. _ks_valid .. '], "invalid": [' .. _ks_invalid .. ']}'
 	expiries = '{"ngx.shared.cert_cache": ' .. cert_cache_duration .. ', "resty.lrucache": ' .. lru_cache_duration .. '}'
-	rval = '{"result": "success", "note": "This is a max(1024) listening of keys in the ngx.shared.DICT `cert_cache`. This does not show the worker\'s own LRU cache, or Redis.", "keys": ' .. ks .. ', "expiries": ' .. expiries .. "}"
+	maxitems = '{"resty.lrucache": ' .. lru_maxitems .. '}'
+	rval = '{"result": "success", "note": "This is a max(1024) listening of keys in the ngx.shared.DICT `cert_cache`. This does not show the worker\'s own LRU cache, or Redis.", "keys": ' .. ks .. ', "config": {"expiries": ' .. expiries .. ', "maxitems": ' .. maxitems .. "}}"
 	ngx_say(rval)
 	return
 end
 
 
 function expire_ssl_certs()
+    ngx_log(ngx_NOTICE, "expire_ssl_certs")
     ngx.header.content_type = 'application/json'
     local prefix = ngx_var.location
     if ngx_var.request_uri == prefix..'/all' then
