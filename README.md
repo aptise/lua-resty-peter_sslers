@@ -4,7 +4,11 @@ Lua support for https://github.com/aptise/peter_sslers Certificate Manager in Op
 
 # Status
 
-This package is almost production-ready.
+This package has been used in production since 2016
+
+The 0.4.0 release requires peter_sslers >= 0.4.0
+
+Earlier releases require peter_sslers < 0.4.0
 
 # Installation
 
@@ -15,6 +19,8 @@ one line...
 ## Synopsis
 
 `lua-resty-peter_sslers` is a library that can be used in an openresty/nginx environment to dynamically serve the correct SSL certificate for a given domain.
+
+Working alongside https://github.com/aptise/peter_sslers , this package will load existing certificates or perform an "autocert" to provision a new one.
 
 It supports both the prime cache types 1 & 2 of `peter_sslers`
 
@@ -66,6 +72,10 @@ Make sure your nginx contains:
 
 ````
     server {
+		# initialize the cert_cache to a size
+		# it will be accessed via `nginx.shared.cert_cache`
+		lua_shared_dict  cert_cache 100k;
+		lua_code_cache  on;
 		init_by_lua_block {
 			require "resty.core"
 			local ssl_certhandler = require "peter_sslers.ssl_certhandler"
@@ -86,7 +96,7 @@ Make sure your nginx contains:
   * `lru_cache_duration` seconds for LRU cache of cdata pointer in worker
   * `lru_maxitems` max number of items for LRU cache of cdata pointer in worker
 
-Then implement the examples routes
+Then implement the example routes
 
 Due to an implementation detail of lua/luajit, the examples below must be implemented in a block/file and can not be "require(/path/to/example)".  This is because of how the redis connection is instantiated.  (see https://github.com/openresty/lua-resty-redis/issues/33 https://github.com/openresty/lua-nginx-module/issues/376 )
 
@@ -198,7 +208,8 @@ This the core work:
 
             local prime_version = 1
             local fallback_server = 'http://0.0.0.0:6543/.well-known/admin'
-            ssl_certhandler_set(prime_version, fallback_server)
+            local enable_autocert = 1
+            ssl_certhandler_set(prime_version, fallback_server, enable_autocert)
         }
 ````
 

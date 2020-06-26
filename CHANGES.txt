@@ -1,3 +1,9 @@
+0.4.0
+	????
+	- added autocert fallback
+	- allow override of cert preferences
+	-- default: {'server_certificate__latest_multi', 'server_certificate__latest_single'}
+
 0.2.1
 	2018.06.28
 	- renamed repo from `peter_sslers-lua-resty` to `lua-resty-peter_sslers`
