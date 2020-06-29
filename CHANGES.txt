@@ -3,6 +3,8 @@
 	- added autocert fallback
 	- allow override of cert preferences
 	-- default: {'server_certificate__latest_multi', 'server_certificate__latest_single'}
+	- some internal terms changed
+	- defense of dogpile during autocert
 
 0.2.1
 	2018.06.28

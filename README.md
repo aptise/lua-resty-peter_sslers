@@ -24,6 +24,8 @@ Working alongside https://github.com/aptise/peter_sslers , this package will loa
 
 It supports both the prime cache types 1 & 2 of `peter_sslers`
 
+It supports "autocert" functionality with `peter_sslers`
+
 It is implemented as a library with some example scripts to invoke it.
 
 * core library
@@ -41,6 +43,10 @@ The library is hardcoded to use db9 in redis.  if you want another option, edit 
 	redcon:select(9)
 	
 Redis is NOT required, but recommended.  Instead you can failover to directly query a peter_sslers pyramid instance.
+
+### To Disable Redis
+
+invoke `ssl_certhandler_set` with `redis_strategy` as `nil`, instead of `1` or `2`. Simple!
 
 To use the Peter SSlers Pyramid fallback, the following library is used:
 
@@ -98,7 +104,7 @@ Make sure your nginx contains:
 
 Then implement the example routes
 
-Due to an implementation detail of lua/luajit, the examples below must be implemented in a block/file and can not be "require(/path/to/example)".  This is because of how the redis connection is instantiated.  (see https://github.com/openresty/lua-resty-redis/issues/33 https://github.com/openresty/lua-nginx-module/issues/376 )
+Due to an implementation detail of lua/luajit, the examples below must be implemented in a block/file and can not be "require(/path/to/example)".  This is because of how the Redis connection is instantiated.  (see https://github.com/openresty/lua-resty-redis/issues/33 https://github.com/openresty/lua-nginx-module/issues/376 )
 
 ### ssl_certhandler.lua
 
@@ -107,7 +113,7 @@ Core library.  Exposes several functions.
 
 ### examples/ssl_certhandler-lookup.lua
 
-This is very simple, it merely specfies a cache, duration, and prime_version
+This is very simple, it merely specfies a cache, duration, and redis_strategy
 
 invoked within nginx...
 
@@ -206,10 +212,10 @@ This the core work:
             -- alias functions
             local ssl_certhandler_set = ssl_certhandler.set_ssl_certificate
 
-            local prime_version = 1
+            local redis_strategy = 1
             local fallback_server = 'http://0.0.0.0:6543/.well-known/admin'
             local enable_autocert = 1
-            ssl_certhandler_set(prime_version, fallback_server, enable_autocert)
+            ssl_certhandler_set(redis_strategy, fallback_server, enable_autocert)
         }
 ````
 
@@ -245,7 +251,10 @@ The logic in pseudocode:
 					cert_cache.set(domain, invalid)
 					return
 			else:
-				cert_pem = 	upstream_https.get(domain)
+				if autocert_enabled:
+					cert_pem = 	upstream_https.get(domain)  # autocert
+				else:
+					cert_pem = 	upstream_https.get(domain)  # query
 				if hit(cert_pem):
 					if invalid(cert_pem):
 						lru_cache.set(domain, invalid)

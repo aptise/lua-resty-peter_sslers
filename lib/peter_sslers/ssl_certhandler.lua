@@ -44,6 +44,7 @@ local cert_cache_duration = 600
 -- lru must timeout
 local lru_cache_duration = 60
 local lru_maxitems = 200  -- allow up to 200 items in the cache
+local allowed_redis_strategy = {1, 2, }
 
 
 function initialize()
@@ -124,34 +125,40 @@ function api_response_to_cert(server_name, response, cert_preferences)
         end
     end
 
-    if cert ~= nil and key ~= nil then
+    local certificate_pem = certificate_pairing()
+    if cert ~= nil and pkey ~= nil then
         ngx_log(ngx_DEBUG, "API query HIT for : ", server_name)
+        certificate_pem['cert'] = cert
+        certificate_pem['pkey'] = pkey
     else
         ngx_log(ngx_DEBUG, "API query MISS for : ", server_name)
     end
-
-    local certificate_pem = certificate_pairing()
-          certificate_pem['cert'] = cert
-          certificate_pem['pkey'] = pkey
     return certificate_pem
 end
 
 
-function certificate_pairing_validate(cert)
+function certificate_pairing_data(cert)
     -- returns true or false based on the validity of a certificate_pairing
     if cert ~= nil and cert['cert'] ~= nil and cert['pkey'] ~= nil then
         return true
+    else
+        return false
     end
-    return false
 end
 
 
-function has_certificate_failmarker(cert)
-    -- returns true if failmarker is present
-    if cert['cert'] == 'x' or cert['pkey'] == 'x' then
+function certificate_pairing_validate(cert)
+    if certificate_pairing_data(cert) then
+        if has_failmarker(cert) then
+            return false
+        end
+        if has_autocertmarker(cert) then
+            return false
+        end
         return true
+    else
+        return false
     end
-    return false
 end
 
 
@@ -169,6 +176,39 @@ end
 -- end
 
 
+function has_failmarker(cert)
+    -- returns true if failmarker is present
+    if cert['cert'] == 'x' or cert['pkey'] == 'x' then
+        return true
+    end
+    return false
+end
+
+
+function has_autocertmarker(cert)
+    -- returns true if autocertmarker is present
+    if cert['cert'] == 'ac' or cert['pkey'] == 'ac' then
+        return true
+    end
+    return false
+end
+
+
+function set_autocertmarker_sharedcache(server_name)
+    local success, err, forcible = cert_cache:set(server_name .. ":c", 'ac', cert_cache_duration)
+    local success, err, forcible = cert_cache:set(server_name .. ":k", 'ac', cert_cache_duration)
+end
+
+
+function clear_autocertmarker_sharedcache(server_name)
+    _cached = get_cert_sharedcache(server_name)
+    if has_autocertmarker(_cached) then
+        local success, err, forcible = cert_cache:delete(server_name .. ":c")
+        local success, err, forcible = cert_cache:delete(server_name .. ":k")
+    end
+end
+
+
 function set_failmarker_sharedcache(server_name)
     local success, err, forcible = cert_cache:set(server_name .. ":c", 'x', cert_cache_duration)
     local success, err, forcible = cert_cache:set(server_name .. ":k", 'x', cert_cache_duration)
@@ -184,7 +224,7 @@ end
 
 function set_cert_lrucache(server_name, certificate_cdata)
     -- Add key and cert to the worker's LRU cache
-    ngx_log(ngx_DEBUG, "Caching cert & key cdata into the worker : ", server_name)
+    ngx_log(ngx_DEBUG, "caching cert & key cdata into the worker : ", server_name)
     -- these 'set' functions don't have a return value
     cert_lrucache:set(server_name .. ":c", certificate_cdata['cert'], lru_cache_duration)
     cert_lrucache:set(server_name .. ":k", certificate_cdata['pkey'], lru_cache_duration)
@@ -193,12 +233,12 @@ end
 
 function set_cert_sharedcache(server_name, certificate_pem)
     -- Add key and cert to the SHARED cache
-    ngx_log(ngx_DEBUG, "Caching PEM cert & key into the shared cache : ", server_name)
+    ngx_log(ngx_DEBUG, "caching PEM cert & key into the shared cache : ", server_name)
     -- these 'set' functions have a return value
     local success, err, forcible = cert_cache:set(server_name .. ":c", certificate_pem['cert'], cert_cache_duration)
-    -- ngx_log(ngx_DEBUG, "Caching certificate_pem[cert] | success : ", success, " Err: ",  err)
+    -- ngx_log(ngx_DEBUG, "caching certificate_pem[cert] | success : ", success, " Err: ",  err)
     local success, err, forcible = cert_cache:set(server_name .. ":k", certificate_pem['pkey'], cert_cache_duration)
-    -- ngx_log(ngx_DEBUG, "Caching certificate_pem[pkey] | success : ", success, " Err: ",  err)
+    -- ngx_log(ngx_DEBUG, "caching certificate_pem[pkey] | success : ", success, " Err: ",  err)
 end
 
 
@@ -228,14 +268,14 @@ function get_redcon()
     -- Connect to redis.  NOTE: this is a pooled connection
     local ok, err = redcon:connect("127.0.0.1", "6379")
     if not ok then
-        ngx_log(ngx_ERR, "REDIS: Failed to connect to redis: ", err)
+        ngx_log(ngx_ERR, "Redis: failed to connect to redis: ", err)
         return nil, err
     end
     -- Change the redis DB to #9
     -- We only have to do this on new connections
     local times, err = redcon:get_reused_times()
     if times <= 0 then
-        ngx_log(ngx_NOTICE, "changing to db 9: ", times)
+        ngx_log(ngx_NOTICE, "Redis: changing to db 9: ", times)
         redcon:select(9)
     end
     return redcon
@@ -249,7 +289,7 @@ function redis_keepalive(redcon)
     -- note: this will close the connection
     local ok, err = redcon:set_keepalive(10000, 100)
     if not ok then
-        ngx_log(ngx_ERR, "failed to set keepalive: ", err)
+        ngx_log(ngx_ERR, "Redis: failed to set keepalive: ", err)
         return
     end
 end
@@ -258,15 +298,15 @@ end
 function prime_1__query_redis(redcon, _server_name)
     -- returns `certificate_pairing()` or `nil`
     -- If the cert isn't in the cache, attept to retrieve from Redis
-    ngx_log(ngx_DEBUG, "prime_1__query_redis : ", _server_name)
+    ngx_log(ngx_DEBUG, "Redis: prime_1__query_redis : ", _server_name)
     local key_domain = "d:" .. _server_name
     local domain_data, err = redcon:hmget(key_domain, 'c', 'p', 'i')
     if domain_data == nil then
-        ngx_log(ngx_DEBUG, "`nil` failed to retreive certificates for domain(", key_domain, ") Err: ", err)
+        ngx_log(ngx_DEBUG, "Redis: `nil` failed to retreive certificates for domain(", key_domain, ") Err: ", err)
         return nil
     end
     if domain_data == ngx_null then
-        ngx_log(ngx_DEBUG, "`ngx_null` failed to retreive certificates for domain(", key_domain, ") Err: ", err)
+        ngx_log(ngx_DEBUG, "Redis: `ngx_null` failed to retreive certificates for domain(", key_domain, ") Err: ", err)
         return nil
     end
     -- ngx_log(ngx_DEBUG, 'err ', err)
@@ -284,25 +324,25 @@ function prime_1__query_redis(redcon, _server_name)
     -- ngx_log(ngx_DEBUG, "id_cacert ", id_cacert)
 
     if id_cert == ngx_null or id_pkey == ngx_null or id_cacert == ngx_null then
-        ngx_log(ngx_DEBUG, "`id_cert == ngx_null or id_pkey == ngx_null or id_cacert == ngx_null for domain(", key_domain, ")")
+        ngx_log(ngx_DEBUG, "Redis: `id_cert == ngx_null or id_pkey == ngx_null or id_cacert == ngx_null for domain(", key_domain, ")")
         return nil
     end
 
     local pkey, err = redcon:get('p'..id_pkey)
     if pkey == nil then
-        ngx_log(ngx_DEBUG, "failed to retreive pkey (", id_pkey, ") for domain (", key_domain, ") Err: ", err)
+        ngx_log(ngx_DEBUG, "Redis: failed to retreive pkey (", id_pkey, ") for domain (", key_domain, ") Err: ", err)
         return nil
     end
 
     local cert, err = redcon:get('c'..id_cert)
     if cert == nil or cert == ngx_null then
-        ngx_log(ngx_DEBUG, "failed to retreive certificate (", id_cert, ") for domain (", key_domain, ") Err: ", err)
+        ngx_log(ngx_DEBUG, "Redis: failed to retreive certificate (", id_cert, ") for domain (", key_domain, ") Err: ", err)
         return nil
     end
 
     local cacert, err = redcon:get('i'..id_cacert)
     if cacert == nil or cacert == ngx_null then
-        ngx_log(ngx_DEBUG, "failed to retreive ca certificate (", id_cacert, ") for domain (", key_domain, ") Err: ", err)
+        ngx_log(ngx_DEBUG, "Redis: failed to retreive ca certificate (", id_cacert, ") for domain (", key_domain, ") Err: ", err)
         return nil
     end
 
@@ -316,15 +356,15 @@ end
 function prime_2__query_redis(redcon, _server_name)
     -- returns `certificate_pairing()` or `nil`
     -- If the cert isn't in the cache, attept to retrieve from Redis
-    ngx_log(ngx_DEBUG, "prime_2__query_redis : ", _server_name)
+    ngx_log(ngx_DEBUG, "Redis: prime_2__query_redis : ", _server_name)
     local key_domain = _server_name
     local domain_data, err = redcon:hmget(key_domain, 'p', 'f')
     if domain_data == nil then
-        ngx_log(ngx_DEBUG, "`nil` failed to retreive certificates for domain(", key_domain, ") Err: ", err)
+        ngx_log(ngx_DEBUG, "Redis: `nil` failed to retreive certificates for domain(", key_domain, ") Err: ", err)
         return nil
     end
     if domain_data == ngx_null then
-        ngx_log(ngx_DEBUG, "`ngx_null` failed to retreive certificates for domain(", key_domain, ") Err: ", err)
+        ngx_log(ngx_DEBUG, "Redis: `ngx_null` failed to retreive certificates for domain(", key_domain, ") Err: ", err)
         return nil
     end
 
@@ -332,7 +372,7 @@ function prime_2__query_redis(redcon, _server_name)
     local fullchain = domain_data[2]
 
     if pkey == ngx_null or fullchain == ngx_null then
-        ngx_log(ngx_DEBUG, "`pkey == ngx_null or fullchain == ngx_null for domain(", key_domain, ")")
+        ngx_log(ngx_DEBUG, "Redis: `pkey == ngx_null or fullchain == ngx_null for domain(", key_domain, ")")
         return nil
     end
 
@@ -352,7 +392,7 @@ function query_api_upstream(fallback_server, server_name, cert_preferences)
     ngx_log(ngx_DEBUG, "query_api_upstream : ", server_name)
 
     local data_uri = fallback_server.."/domain/"..server_name.."/config.json?openresty=1"
-    ngx_log(ngx_DEBUG, "querysing upstream API server at: ", data_uri)
+    ngx_log(ngx_DEBUG, "querying upstream API server at: ", data_uri)
     local httpc = http_new()
     local response, err = httpc:request_uri(data_uri, {method = "GET", })
     certificate_pem = api_response_to_cert(server_name, response, cert_preferences)
@@ -369,7 +409,7 @@ function query_api_autocert(fallback_server, server_name)
     ngx_log(ngx_DEBUG, "query_api_autocert : ", server_name)
 
     local data_uri = fallback_server.."/api/domain/autocert.json?openresty=1"
-    ngx_log(ngx_DEBUG, "querysing autocert API server at: ", data_uri)
+    ngx_log(ngx_DEBUG, "querying autocert API server at: ", data_uri)
     local httpc = http_new()
     local response, err = httpc:request_uri(data_uri, {
         method = "POST",
@@ -388,10 +428,10 @@ end
 -- START MAIN LOGIC
 
 
-function set_ssl_certificate(prime_method, fallback_server, enable_autocert, cert_preferences)
+function set_ssl_certificate(redis_strategy, fallback_server, enable_autocert, cert_preferences)
     -- main functionality
     --   queries datastores for certificate data, loads into nginx/openresy
-    -- prime_method
+    -- redis_strategy : nil = Do not use Redis; 1,2 = peter_sslers redis-prime versions
     -- fallback_server : http(s) server root for peter_sslers installation
     -- enable_autocert? : nil = NO; not-nil = YES
     -- cert_preferences : an array to attempt searching in payload
@@ -414,49 +454,55 @@ function set_ssl_certificate(prime_method, fallback_server, enable_autocert, cer
     end
     ngx_log(ngx_DEBUG, "SNI Lookup for : ", server_name)
 
-    -- check worker lru cache first
-    -- this stashes an actual cert
-    local certificate_cdata = get_cert_lrucache(server_name)
-
     -- used for fallbacks
     local certificate_pem = nil
 
-    if certificate_pairing_validate(certificate_cdata) then
+    -- check worker lru cache first
+    -- this stashes an actual cert
+    local certificate_cdata = get_cert_lrucache(server_name)
+    if certificate_pairing_data(certificate_cdata) then
         ngx_log(ngx_DEBUG, "cert_lrucache HIT for : ", server_name)
-        if has_certificate_failmarker(certificate_cdata) then
-            ngx_log(ngx_DEBUG, "Previously seen unsupported domain")
+        if has_failmarker(certificate_cdata) then
+            ngx_log(ngx_DEBUG, "previously seen unsupported domain : ", server_name)
             -- don't bother with IP lookups
             -- exit out and just fall back on the default ssl cert
             return
         end
     else
+        -- if the cert is unknown to the worker...
         -- now we check the fallback system
 
         -- check the nginx shared cache for certficate
         certificate_pem = get_cert_sharedcache(server_name)
-        if certificate_pairing_validate(certificate_pem) then
+        if certificate_pairing_data(certificate_pem) then
             ngx_log(ngx_DEBUG, "shared `cert_cache` HIT for : ", server_name)
-            if has_certificate_failmarker(certificate_pem) then
-                ngx_log(ngx_DEBUG, "Previously seen unsupported domain in ngx.shared.DICT")
+            if has_failmarker(certificate_pem) then
+                ngx_log(ngx_DEBUG, "previously seen unsupported domain in ngx.shared.DICT : ", server_name)
                 -- cache onto the worker's lru cache
                 set_failmarker_lrucache(server_name)
 
                 -- don't bother with more lookups; exit out to nginx and just fall back on the default ssl cert
                 return
             end
+
+            if has_autocertmarker(certificate_pem) then
+                ngx_log(ngx_DEBUG, "domain undergoing AutoCert ngx.shared.DICT : ", server_name)
+                -- don't bother storing in the local cache
+                -- don't bother with more lookups; exit out to nginx and just fall back on the default ssl cert
+                return
+            end
+
         else
             ngx_log(ngx_DEBUG, "shared `cert_cache` MISS for : ", server_name)
 
             -- our upstream providers will return a `certificate_pairing()` or `nil` value
             -- certificate_pem will be our main focus
 
-            if prime_method ~= nil then
+            if redis_strategy ~= nil then
                 -- ok, try to get it from redis
                 ngx_log(ngx_DEBUG, "Redis: lookup enabled")
-
-                local allowed_prime_methods = {1, 2, }
-                if not allowed_prime_methods[prime_method] then
-                    ngx_log(ngx_ERR, "Redis: invalid `prime_method` not (1, 2) is `", prime_method, "`")
+                if not allowed_redis_strategy[redis_strategy] then
+                    ngx_log(ngx_ERR, "Redis: invalid `redis_strategy` not (1, 2) is `", redis_strategy, "`")
                     return
                 end
 
@@ -469,9 +515,9 @@ function set_ssl_certificate(prime_method, fallback_server, enable_autocert, cer
                 end
 
                 -- actually query redis
-                if prime_method == 1 then
+                if redis_strategy == 1 then
                     certificate_pem = prime_1__query_redis(redcon, server_name)
-                elseif prime_method == 2 then
+                elseif redis_strategy == 2 then
                     certificate_pem = prime_2__query_redis(redcon, server_name)
                 end
 
@@ -481,14 +527,17 @@ function set_ssl_certificate(prime_method, fallback_server, enable_autocert, cer
 
             -- use a fallback search?
             if fallback_server ~= nil then
-                if not certificate_pairing_validate(certificate_pem) then
+                if not certificate_pairing_data(certificate_pem) then
                     if enable_autocert ~= nil then
                         -- fallback autocert
-                        ngx_log(ngx_DEBUG, "Upstream API: autocert enabled")
+                        ngx_log(ngx_DEBUG, "UpstreamAPI: autocert enabled")
+                        -- wrap this within an autocert marker; this will keep other workers from hitting it
+                        set_autocertmarker_sharedcache(server_name)
                         certificate_pem = query_api_autocert(fallback_server, server_name, cert_preferences)
+                        clear_autocertmarker_sharedcache(server_name)
                     else
                         -- fallback query
-                        ngx_log(ngx_DEBUG, "Upstream API: lookup enabled")
+                        ngx_log(ngx_DEBUG, "UpstreamAPI: lookup enabled")
                         certificate_pem = query_api_upstream(fallback_server, server_name, cert_preferences)
                     end
                 end
@@ -499,7 +548,7 @@ function set_ssl_certificate(prime_method, fallback_server, enable_autocert, cer
             if certificate_pairing_validate(certificate_pem) then
                 set_cert_sharedcache(server_name, certificate_pem)
             else
-                ngx_log(ngx_DEBUG, "Failed to retrieve PEM for : ", server_name)
+                ngx_log(ngx_DEBUG, "failed to retrieve PEM for : ", server_name)
 
                 -- set a fail marker - SHARED cache
                 set_failmarker_sharedcache(server_name)
@@ -513,7 +562,7 @@ function set_ssl_certificate(prime_method, fallback_server, enable_autocert, cer
         end
 
         -- at this point we have a valid PEM
-        -- if certificate_pairing_validate(certificate_pem) then
+        -- if certificate_pairing_data(certificate_pem) then
         -- end
 
         -- convert from PEM to cdata for WORKER cache (and this server!)
@@ -521,7 +570,7 @@ function set_ssl_certificate(prime_method, fallback_server, enable_autocert, cer
         set_cert_lrucache(server_name, certificate_cdata)
     end
 
-    if certificate_pairing_validate(certificate_cdata) then
+    if certificate_pairing_data(certificate_cdata) then
         -- since we have a certs for this server, now we can continue...
         ssl_clear_certs()
 
@@ -554,6 +603,7 @@ function status_ssl_certs()
     ks = ''
     ks_valid = {}
     ks_invalid = {}
+    ks_autocert = {}
     -- max count is 1024, but specify it anyways
     local all_keys = cert_cache:get_keys(1024)
 
@@ -572,6 +622,8 @@ function status_ssl_certs()
             -- ngx_log(ngx_DEBUG, "v ", v)
             if v == 'x' then
                 table.insert(ks_invalid, _domain)
+            elseif v == 'ac' then
+                table.insert(ks_autocert, _domain)
             else
                 table.insert(ks_valid, _domain)
             end
@@ -592,10 +644,19 @@ function status_ssl_certs()
     end
     -- remove the last ,
     _ks_invalid = _ks_invalid:sub(1, -2)
-    ks = '{"valid": [' .. _ks_valid .. '], "invalid": [' .. _ks_invalid .. ']}'
+
+    _ks_autocert = ''
+    -- `_ks_autocert` is a table of (idx, key)
+    for idx, k in pairs(ks_autocert) do
+        _ks_autocert = _ks_autocert .. '"' .. k .. '",'
+    end
+    -- remove the last ,
+    _ks_autocert = _ks_autocert:sub(1, -2)
+
+    ks = '{"valid": [' .. _ks_valid .. '], "invalid": [' .. _ks_invalid .. '], "autocert": [' .. _ks_autocert .. ']}'
     expiries = '{"ngx.shared.cert_cache": ' .. cert_cache_duration .. ', "resty.lrucache": ' .. lru_cache_duration .. '}'
     maxitems = '{"resty.lrucache": ' .. lru_maxitems .. '}'
-    rval = '{"result": "success", "note": "This is a max(1024) listening of keys in the ngx.shared.DICT `cert_cache`. This does not show the worker\'s own LRU cache, or Redis.", "keys": ' .. ks .. ', "config": {"expiries": ' .. expiries .. ', "maxitems": ' .. maxitems .. "}}"
+    rval = '{"result": "success", "note": "This is a max(1024) listening of keys in the ngx.shared.DICT `cert_cache`. This does not show the worker\'s own LRU cache, or Redis.", "keys": ' .. ks .. ', "config": {"expiries": ' .. expiries .. ', "maxitems": ' .. maxitems .. '}, "server": "peter_sslers:openresty"}}'
     ngx_say(rval)
     return
 end
@@ -607,16 +668,16 @@ function expire_ssl_certs()
     local prefix = ngx_var.location
     if ngx_var.request_uri == prefix..'/all' then
         cert_cache:flush_all()
-        ngx_say('{"result": "success", "expired": "all"}')
+        ngx_say('{"result": "success", "expired": "all", "server": "peter_sslers:openresty"}')
         return
     end
     local _domain = string.match(ngx_var.request_uri, '^'..prefix..'/domain/([%w-.]+)$')
     if _domain then
         cert_cache:delete(_domain)
-        ngx_say('{"result": "success", "expired": "domain", "domain": "' .. _domain ..'"}')
+        ngx_say('{"result": "success", "expired": "domain", "domain": "' .. _domain ..'", "server": "peter_sslers:openresty"}')
         return
     end
-    ngx_say('{"result": "error", "expired": "None", "reason": "Unknown URI"}')
+    ngx_say('{"result": "error", "expired": "None", "reason": "Unknown URI", "server": "peter_sslers:openresty"}')
     ngx.status = 404
     return
 end
