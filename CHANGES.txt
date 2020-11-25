@@ -1,3 +1,7 @@
+0.4.2
+	2020.11.24
+	- improved packaging
+
 0.4.1
 	2020.11.24
 	- added version to json payloads
