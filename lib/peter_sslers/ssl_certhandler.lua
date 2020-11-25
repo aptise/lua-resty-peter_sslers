@@ -48,7 +48,7 @@ local cert_cache_duration = 600
 local lru_cache_duration = 60
 local lru_maxitems = 200  -- allow up to 200 items in the cache
 local allowed_redis_strategy = {1, 2, }
-local server_version = "0.4.1"
+local VERSION = "0.4.2"
 
 
 local function initialize()
@@ -800,7 +800,7 @@ local function status_ssl_certs()
                  ', "keys": ' .. ks .. ', "config": {"expiries": ' ..
                  expiries .. ', "maxitems": ' .. maxitems .. '}, "server": ' ..
                  '"peter_sslers:openresty", "server_version": "' ..
-                 server_version .. '"}'
+                 VERSION .. '"}'
     ngx_say(rval)
     return
 end
@@ -815,7 +815,7 @@ local function expire_ssl_certs()
         ngx_say(
             '{"result": "success", "expired": "all", ' ..
             '"server": "peter_sslers:openresty", ' ..
-            '"server_version": "' .. server_version .. '"}'
+            '"server_version": "' .. VERSION .. '"}'
         )
         return
     end
@@ -826,13 +826,13 @@ local function expire_ssl_certs()
         cert_cache:delete(_domain)
         ngx_say('{"result": "success", "expired": "domain", "domain": "' ..
                 _domain ..'", "server": "peter_sslers:openresty", ' ..
-                '"server_version": "' .. server_version .. '"}'
+                '"server_version": "' .. VERSION .. '"}'
                 )
         return
     end
     ngx_say('{"result": "error", "expired": "None", "reason": "Unknown URI"' ..
             ', "server": "peter_sslers:openresty", ' ..
-            '"server_version": "' .. server_version .. '"}'
+            '"server_version": "' .. VERSION .. '"}'
             )
     ngx.status = 404
     return
