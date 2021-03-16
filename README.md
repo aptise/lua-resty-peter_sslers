@@ -352,6 +352,10 @@ Jonathan Vanasco <jonathan@findmeon.com>
 Originally started in https://github.com/aptise/peter_sslers
 
 
+The tests and github actions are copied or inspired by the excellent lua-resty-http
+module https://github.com/ledgetech/lua-resty-http by James Hurst.
+
+
 # Licence
 
 This module is licensed under the MIT License.  See `LICENSE.txt`

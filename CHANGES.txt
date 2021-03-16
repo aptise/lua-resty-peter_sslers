@@ -1,3 +1,8 @@
+0.4.3dev
+	2021.03.16
+	- added version to headers
+	- integrating tests and github actions
+
 0.4.2
 	2020.11.24
 	- improved packaging

@@ -16,6 +16,7 @@ local cjson_null = cjson_safe.null
 local http_new = http.new
 local ngx_DEBUG = ngx.DEBUG
 local ngx_ERR = ngx.ERR
+local ngx_header = ngx.header
 local ngx_log = ngx.log
 local ngx_NOTICE = ngx.NOTICE
 local ngx_null = ngx.null
@@ -48,7 +49,7 @@ local cert_cache_duration = 600
 local lru_cache_duration = 60
 local lru_maxitems = 200  -- allow up to 200 items in the cache
 local allowed_redis_strategy = {1, 2, }
-local VERSION = "0.4.2"
+local _VERSION = '0.4.3'
 
 
 local function initialize()
@@ -382,24 +383,24 @@ local function prime_1__query_redis(redcon, _server_name)
     -- lua arrays are 1 based!
     local id_cert = domain_data[1]
     local id_pkey = domain_data[2]
-    local id_cacert = domain_data[3]
+    local id_cacertchain = domain_data[3]
 
     -- conditional logging
     -- ngx_log(ngx_DEBUG, "prime_1__query_redis")
     -- ngx_log(ngx_DEBUG, "id_cert ", id_cert)
     -- ngx_log(ngx_DEBUG, "id_pkey ", id_pkey)
-    -- ngx_log(ngx_DEBUG, "id_cacert ", id_cacert)
+    -- ngx_log(ngx_DEBUG, "id_cacertchain ", id_cacertchain)
 
-    if id_cert == ngx_null or id_pkey == ngx_null or id_cacert == ngx_null then
+    if id_cert == ngx_null or id_pkey == ngx_null or id_cacertchain == ngx_null then
         ngx_log(ngx_DEBUG,
             "Redis: `id_cert == ngx_null or id_pkey == ngx_null or " ..
-            "id_cacert == ngx_null for domain(", key_domain, ")"
+            "id_cacertchain == ngx_null for domain(", key_domain, ")"
         )
         return nil
     end
 
     -- scoping
-    local pkey, cert, cacert
+    local pkey, cert, cacertchain
 
     pkey, err = redcon:get('p' .. id_pkey)
     if pkey == nil then
@@ -419,17 +420,17 @@ local function prime_1__query_redis(redcon, _server_name)
         return nil
     end
 
-    cacert, err = redcon:get('i' .. id_cacert)
-    if cacert == nil or cacert == ngx_null then
+    cacertchain, err = redcon:get('i' .. id_cacertchain)
+    if cacertchain == nil or cacertchain == ngx_null then
         ngx_log(ngx_DEBUG,
-            "Redis: failed to retreive ca certificate (", id_cacert,
+            "Redis: failed to retreive ca certificate (", id_cacertchain,
             ") for domain (", key_domain, ") Err: ", err
         )
         return nil
     end
 
     local certificate_pem = certificate_pairing()
-          certificate_pem['cert'] = cert .. "\n" .. cacert
+          certificate_pem['cert'] = cert .. "\n" .. cacertchain
           certificate_pem['pkey'] = pkey
     return certificate_pem
 end
@@ -735,7 +736,8 @@ end
 
 local function status_ssl_certs()
     ngx_log(ngx_NOTICE, "status_ssl_certs")
-    ngx.header.content_type = 'application/json'
+    ngx_header.content_type = 'application/json'
+    ngx_header["x-peter-sslers"] = _VERSION
     -- handmade json value
     local ks_valid = {}
     local ks_invalid = {}
@@ -800,7 +802,7 @@ local function status_ssl_certs()
                  ', "keys": ' .. ks .. ', "config": {"expiries": ' ..
                  expiries .. ', "maxitems": ' .. maxitems .. '}, "server": ' ..
                  '"peter_sslers:openresty", "server_version": "' ..
-                 VERSION .. '"}'
+                 _VERSION .. '"}'
     ngx_say(rval)
     return
 end
@@ -808,14 +810,15 @@ end
 
 local function expire_ssl_certs()
     ngx_log(ngx_NOTICE, "expire_ssl_certs")
-    ngx.header.content_type = 'application/json'
+    ngx_header.content_type = 'application/json'
+    ngx_header["x-peter-sslers"] = _VERSION
     local prefix = ngx_var.location
     if ngx_var.request_uri == prefix .. '/all' then
         cert_cache:flush_all()
         ngx_say(
             '{"result": "success", "expired": "all", ' ..
             '"server": "peter_sslers:openresty", ' ..
-            '"server_version": "' .. VERSION .. '"}'
+            '"server_version": "' .. _VERSION .. '"}'
         )
         return
     end
@@ -826,13 +829,13 @@ local function expire_ssl_certs()
         cert_cache:delete(_domain)
         ngx_say('{"result": "success", "expired": "domain", "domain": "' ..
                 _domain ..'", "server": "peter_sslers:openresty", ' ..
-                '"server_version": "' .. VERSION .. '"}'
+                '"server_version": "' .. _VERSION .. '"}'
                 )
         return
     end
     ngx_say('{"result": "error", "expired": "None", "reason": "Unknown URI"' ..
             ', "server": "peter_sslers:openresty", ' ..
-            '"server_version": "' .. VERSION .. '"}'
+            '"server_version": "' .. _VERSION .. '"}'
             )
     ngx.status = 404
     return
@@ -851,6 +854,7 @@ local _M = {get_redcon = get_redcon,
 
             initialize_worker = initialize_worker,
             initialize = initialize,
+            _VERSION = _VERSION,
             }
 
 return _M
