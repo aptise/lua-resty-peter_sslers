@@ -340,6 +340,18 @@ expire
 	curl -k https://peter:sslers@127.0.0.1/.peter_sslers/nginx/shared_cache/expire
 	
 	
+### Tests
+
+#### Luacheck
+
+The tests in `test.yml` disable unused variables:
+
+    - run: luacheck lib --no-unused
+
+To do local tests
+
+	luarocks install luacheck
+	luacheck lib
 
 
 ### Known problems
