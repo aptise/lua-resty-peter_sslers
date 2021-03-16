@@ -38,6 +38,7 @@ jobs:
       run: |
         apk add --no-cache curl perl bash wget git perl-dev libarchive-tools
         ln -s /usr/bin/bsdtar /usr/bin/tar
+        opm get pintsized/lua-resty-http
 
     - name: Install CPAN
       run: curl -s -L http://xrl.us/cpanm > /bin/cpanm && chmod +x /bin/cpanm
