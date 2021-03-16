@@ -4,6 +4,7 @@ use Cwd qw(cwd);
 my $pwd = cwd();
 
 $ENV{TEST_NGINX_RESOLVER} = '8.8.8.8';
+$ENV{TEST_NGINX_PWD} ||= $pwd;
 $ENV{TEST_COVERAGE} ||= 0;
 
 our $HttpConfig = qq{
@@ -14,12 +15,13 @@ our $HttpConfig = qq{
     lua_code_cache  on;
 
     init_by_lua_block {
+        require "resty.core"
+
         if $ENV{TEST_COVERAGE} == 1 then
             jit.off()
             require("luacov.runner").init()
         end
 
-        require "resty.core"
         local ssl_certhandler = require "peter_sslers.ssl_certhandler"
         ssl_certhandler.initialize()
     }

@@ -1,11 +1,13 @@
 -- The includes
--- we may not need resty.http,
--- but including it here is better for memory if we need it
+-- "local ngx" is needed for coverage
+local ngx = ngx
 local cjson_safe = require "cjson.safe"
 local lrucache = require "resty.lrucache"
 local redis = require "resty.redis"
 local ssl = require "ngx.ssl"
 
+-- we may not need resty.http,
+-- but including it here is better for memory if we need it
 -- this is the pintsized library
 local http = require "resty.http"
 
