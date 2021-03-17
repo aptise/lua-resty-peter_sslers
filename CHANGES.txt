@@ -1,7 +1,8 @@
-0.4.3dev
+0.5.0
 	2021.03.16
 	- added version to headers
 	- integrating tests and github actions
+	- renamed 'peter_sslers/ssl_certhandler.lua' to 'resty/peter_sslers.lua'
 
 0.4.2
 	2020.11.24

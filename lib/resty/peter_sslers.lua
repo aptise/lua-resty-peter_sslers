@@ -51,11 +51,11 @@ local cert_cache_duration = 600
 local lru_cache_duration = 60
 local lru_maxitems = 200  -- allow up to 200 items in the cache
 local allowed_redis_strategy = {1, 2, }
-local _VERSION = '0.4.3'
+local _VERSION = '0.5.0'
 
 
 local function initialize()
-    ngx_log(ngx_NOTICE, "ssl_certhandler.initialize")
+    ngx_log(ngx_NOTICE, "peter_sslers.initialize")
     -- we currently use `initialize_worker`, but this may be used in the future
     return true
 end
@@ -64,7 +64,7 @@ end
 local function initialize_worker(
     _cert_cache_duration, _lru_cache_duration, _lru_maxitems
     )
-    ngx_log(ngx_NOTICE, "ssl_certhandler.initialize_worker")
+    ngx_log(ngx_NOTICE, "peter_sslers.initialize_worker")
 
     -- copy overrides
     cert_cache_duration = _cert_cache_duration or cert_cache_duration
@@ -72,15 +72,15 @@ local function initialize_worker(
     lru_maxitems = _lru_maxitems or lru_maxitems
 
     ngx_log(ngx_NOTICE,
-        "ssl_certhandler.initialize_worker | cert_cache_duration ",
+        "peter_sslers.initialize_worker | cert_cache_duration ",
         cert_cache_duration
     )
     ngx_log(ngx_NOTICE,
-        "ssl_certhandler.initialize_worker | lru_cache_duration ",
+        "peter_sslers.initialize_worker | lru_cache_duration ",
         lru_cache_duration
     )
     ngx_log(ngx_NOTICE,
-        "ssl_certhandler.initialize_worker | lru_maxitems ",
+        "peter_sslers.initialize_worker | lru_maxitems ",
         lru_maxitems
     )
 
