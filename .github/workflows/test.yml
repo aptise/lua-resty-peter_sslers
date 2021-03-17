@@ -62,7 +62,10 @@ jobs:
     - name: Run tests
       env:
         TEST_COVERAGE: '1'
-      run: /usr/bin/prove -I../test-nginx/lib -r t/
+      run: |
+         pwd
+         ls -alh
+         /usr/bin/prove -I../test-nginx/lib -r t/
 
     - name: Coverage
       run: |
