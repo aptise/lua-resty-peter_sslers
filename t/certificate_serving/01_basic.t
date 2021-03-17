@@ -44,9 +44,9 @@ our $HttpConfig = qq{
 		ssl_certificate ../../cert/test2.crt;
 		ssl_certificate_key ../../cert/test2.key;
         server_tokens off;
-        location /foo {
+        location /actual-test {
             default_type 'text/plain';
-            content_by_lua_block { ngx.status = 201 ngx.say("foo") ngx.exit(201) }
+            content_by_lua_block { ngx.status = 201 ngx.say("actual-test") ngx.exit(201) }
             more_clear_headers Date;
         }
 	}
@@ -55,16 +55,6 @@ no_long_string();
 #no_diff();
 log_level("debug");
 run_tests();
-
-#
-# these tests are kind of weird
-# we set up two servers
-# 1- a ssl server, which we want to test
-# 2- a http server, which we can request against
-
-# see https://github.com/openresty/lua-nginx-module/blob/master/t/139-ssl-cert-by.t
-# see https://github.com/openresty/lua-nginx-module/blob/master/t/140-ssl-c-api.t
-
 
 __DATA__
 === TEST 1: simple cert, one nginx server queries the other

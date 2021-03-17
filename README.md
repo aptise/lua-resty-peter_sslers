@@ -7,9 +7,12 @@ OpenResty
 
 This package has been used in production since 2016
 
-The `0.4.0` release requires `peter_sslers >= 0.4.0`
+The `0.5.0` release requires `peter_sslers >= 0.5.0`
+
+The `0.4.0` release requires `peter_sslers >= 0.4.0, <0.5.0`
 
 Earlier releases require `peter_sslers < 0.4.0`
+
 
 # Installation
 
@@ -379,8 +382,25 @@ Run the test(s)
 	/usr/bin/prove -I../test-nginx/lib -r t/
 
 
-
 ### Known problems
+
+
+
+
+# Versioning
+
+This project uses Major.Minor.Path semantic versioning.
+
+Major.Minor version releases are pegged to the same Major.Minor releases as
+`lua-resty-peter__slers`.
+
+For example:
+
+| peter_sslers | lua-resty-peter_sslers | compatible ? |
+| --- | --- | --- |
+| 0.5.1 | 0.5.1 | YES |
+| 0.5.1 | 0.5.0 | YES. Patch version mismatch ok! |
+| 0.5.1 | 0.4.2 | NO. Minor version mismatch. |
 
 
 # Author
