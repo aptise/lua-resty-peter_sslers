@@ -56,6 +56,7 @@ local _VERSION = '0.4.3'
 
 local function initialize()
     ngx_log(ngx_NOTICE, "ssl_certhandler.initialize")
+    -- we currently use `initialize_worker`, but this may be used in the future
     return true
 end
 
@@ -835,11 +836,12 @@ local function expire_ssl_certs()
                 )
         return
     end
+    ngx_log(ngx_ERR, "expire_ssl_certs - malformed request")
+    ngx.status = 404
     ngx_say('{"result": "error", "expired": "None", "reason": "Unknown URI"' ..
             ', "server": "peter_sslers:openresty", ' ..
             '"server_version": "' .. _VERSION .. '"}'
             )
-    ngx.status = 404
     return
 end
 

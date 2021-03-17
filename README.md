@@ -353,6 +353,32 @@ To do local tests
 	luarocks install luacheck
 	luacheck lib
 
+#### Test::Nginx
+
+Upgrade CPAN
+
+	cpan
+	upgrade
+
+Install cpanm
+
+	cpan App::cpanminus
+
+Install the test harness
+
+	cpanm -q -n Test::Nginx
+
+
+Where is your openresty? Make sure it's in the path
+
+	export PATH=/usr/local/openresty/nginx/sbin:$PATH
+	export PATH=/usr/local/bin/:$PATH
+
+Run the test(s)
+
+	/usr/bin/prove -I../test-nginx/lib -r t/
+
+
 
 ### Known problems
 
@@ -363,9 +389,9 @@ Jonathan Vanasco <jonathan@findmeon.com>
 
 Originally started in https://github.com/aptise/peter_sslers
 
-
 The tests and github actions are copied or inspired by the excellent lua-resty-http
-module https://github.com/ledgetech/lua-resty-http by James Hurst.
+module https://github.com/ledgetech/lua-resty-http by James Hurst and the openresty
+test suites.
 
 
 # Licence
