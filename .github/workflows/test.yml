@@ -64,7 +64,9 @@ jobs:
         TEST_COVERAGE: '1'
       run: |
          pwd
-         ls -alh
+         ls -alh .
+         ls -alh lib
+         ls -alh lib/peter_sslers
          /usr/bin/prove -I../test-nginx/lib -r t/
 
     - name: Coverage
