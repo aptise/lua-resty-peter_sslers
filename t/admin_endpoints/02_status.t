@@ -8,7 +8,7 @@ $ENV{TEST_COVERAGE} ||= 0;
 $ENV{TEST_NGINX_HTML_DIR} ||= html_dir();
 
 our $HttpConfig = qq{
-    lua_package_path "$pwd/lib/?.lua;/usr/local/share/lua/5.1/?.lua;;";
+    lua_package_path "$pwd/lib/?.lua;;";
     error_log logs/error.log debug;
 
     lua_shared_dict  cert_cache 100k;

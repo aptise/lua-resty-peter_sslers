@@ -27,7 +27,7 @@ run_tests();
 __DATA__
 === TEST 1: simple cert, one nginx server queries the other
 --- http_config
-    lua_package_path "$pwd/lib/?.lua;/usr/local/share/lua/5.1/?.lua;;";
+    lua_package_path "$pwd/lib/?.lua;;";
     error_log logs/error.log debug;
 
 	lua_shared_dict  cert_cache 100k;
