@@ -33,28 +33,17 @@ jobs:
       # --init runs tinit as PID 1 and prevents the 'WARNING: killing the child process' spam from the test suite
       options: --init
 
-    # Service containers to run with `runner-job`
-    services:
-      # Label used to access the service container
-      redis:
-        # Docker Hub image
-        image: redis
-        # Set health checks to wait until redis has started
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          # Maps port 6379 on service container to the host
-          - 6379:6379
-
     steps:
     - name: Install deps
       run: |
         apk add --no-cache curl perl bash wget git perl-dev libarchive-tools
         ln -s /usr/bin/bsdtar /usr/bin/tar
         opm get ledgetech/lua-resty-http
+
+    - name: Start Redis
+      uses: supercharge/redis-github-action@1.2.0
+      with:
+        redis-version: ${{ matrix.redis-version }}
 
     - name: Install CPAN
       run: curl -s -L http://xrl.us/cpanm > /bin/cpanm && chmod +x /bin/cpanm
