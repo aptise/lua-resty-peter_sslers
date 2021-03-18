@@ -1,12 +1,13 @@
-# copied from
+# originally copied from
 # https://github.com/ledgetech/lua-resty-http/blob/master/.github/workflows/test.yml
 
 name: Test
 
 on:
   push:
-    paths-ignore: # Skip if only docs are updated
-        - '*.md'
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
 
 jobs:
   luacheck:
@@ -21,13 +22,13 @@ jobs:
     - run: luacheck lib --no-unused
 
   run_tests:
+    runs-on: ubuntu-latest
     strategy:
       matrix:
         openresty_version:
           - 1.17.8.1
           - 1.19.3.1
 
-    runs-on: ubuntu-latest
     container:
       image: openresty/openresty:${{ matrix.openresty_version }}-alpine-fat
       # --init runs tinit as PID 1 and prevents the 'WARNING: killing the child process' spam from the test suite
@@ -35,16 +36,11 @@ jobs:
 
     steps:
     - name: Install deps
+      # several tests require Redis
       run: |
-        apk add --no-cache curl perl bash wget git perl-dev libarchive-tools
+        apk add --no-cache curl perl bash wget git perl-dev libarchive-tools redis
         ln -s /usr/bin/bsdtar /usr/bin/tar
         opm get ledgetech/lua-resty-http
-
-    - name: Install Redis
-      # several tests require Redis
-      # note: if tests hang, it could be because the Redis version has changed
-      run: |
-        sudo apt-get install redis
 
     - name: Install CPAN
       run: curl -s -L http://xrl.us/cpanm > /bin/cpanm && chmod +x /bin/cpanm
