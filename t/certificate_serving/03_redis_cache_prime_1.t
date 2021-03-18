@@ -32,7 +32,7 @@ our $HttpConfig_1 = qq{
 
             -- requirements
             local ssl_certhandler = require "resty.peter_sslers"
-            ssl_certhandler.redis_update_defaults("localhost", 6379, 9)
+            ssl_certhandler.redis_update_defaults("localhost", "6379", 9)
 
 			-- PRIME START
 			-- load the cert into the Redis cache
