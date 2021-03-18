@@ -131,8 +131,8 @@ local function api_response_to_cert(server_name, response, cert_preferences)
                 -- default cert_preferences
                 if cert_preferences == nil then
                     cert_preferences = {
-                        'server_certificate__latest_multi',
-                        'server_certificate__latest_single'
+                        'certificate_signed__latest_multi',
+                        'certificate_signed__latest_single'
                     }
                 end
                 for index, value in next, cert_preferences do
@@ -555,8 +555,8 @@ local function set_ssl_certificate(
     -- fallback_server : http(s) server root for peter_sslers installation
     -- enable_autocert? : nil = NO; not-nil = YES
     -- cert_preferences : an array to attempt searching in payload
-    --                    should be {"server_certificate__latest_single",
-    --                               "server_certificate__latest_multi"}
+    --                    should be {"certificate_signed__latest_single",
+    --                               "certificate_signed__latest_multi"}
     --
     -- note: cache the cdata certs for no more than 60s
     -- these are PER-WORKER, and may stick around for this
