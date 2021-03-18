@@ -27,7 +27,7 @@ our $HttpConfig = qq{
         listen unix:$ENV{TEST_NGINX_HTML_DIR}/nginx.sock ssl;
         server_name example.com;
 		ssl_certificate_by_lua_block  {
-            ngx.log(ngx.ERR, "server: ssl_certhandler")
+            ngx.log(ngx.DEBUG, "server: ssl_certhandler")
 
 			-- requirements
 			local ssl_certhandler = require "resty.peter_sslers"
@@ -56,7 +56,7 @@ our $Config = qq{
 	server_tokens off;
 	location /t {
         content_by_lua_block {
-            ngx.log(ngx.ERR, "server: test server")
+            ngx.log(ngx.DEBUG, "server: test server")
             do
                 local sock = ngx.socket.tcp()
                 sock:settimeout(2000)
@@ -106,3 +106,5 @@ cert_lrucache HIT for : example.com
 shared `cert_cache` HIT for : example.com
 failed to set ssl private key : example.com
 set ssl private key : example.com
+Redis: lookup enabled
+

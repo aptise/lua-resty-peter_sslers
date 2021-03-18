@@ -14,9 +14,16 @@ This took the longest to figure out, because I haven't used Perl in 15+ years
 and the error messages can be confusing.
 
 The `$pwd` element is not interpolated into the shared `$HttpConfig` variable
-when defined.  Instead, one must use `eval`
+when defined.  Instead, one must use `eval`.
 
     --- http_config eval: $::HttpConfig
+
+Similarly, depending on the context where it is defined or invoked, a variable
+may or may not require:
+
+* A package identifier, such as the `::` prefix
+* Curly brackets
+
 
 # Test Design
 

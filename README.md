@@ -49,11 +49,17 @@ It is implemented as a library with some example scripts to invoke it.
 The `-lookup.lua`, `-expire.lua`,  `-status.lua` scripts can be copied into a
 block.
 
-The library is hardcoded to use db9 in redis.  if you want another option, edit
-or PR a fix on the line that looks like:
+The library defaults to use the following information for redis:
 
-	ngx.log(ngx.ERR, "changing to db 9: ", times)
-	redcon:select(9)
+	local redis_ip = '127.0.0.1'
+	local redis_port = '6379'
+	local redis_db_number = 9
+
+This can be altered using "redis_update_defaults"
+
+	redis_update_defaults(_redis_ip, _redis_port, _redis_db_number)
+
+This function is NOT currently tested.
 
 Redis is NOT required, but recommended.  Instead you can failover to directly
 query a peter_sslers pyramid instance.

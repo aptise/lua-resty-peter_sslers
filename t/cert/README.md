@@ -1,6 +1,6 @@
 These Certificates and Keys are used for tests.
 
-* example.com.cert + example.com.privkey
+* example.com.crt + example.com.key
   * self signed certificate
   * covers example.com
   * `openssl req -newkey rsa:2048 -nodes -keyout example.com.key -x509 -days 365000 -out example.com.crt`
@@ -12,7 +12,7 @@ These Certificates and Keys are used for tests.
     > Common Name (e.g. server FQDN or YOUR name) []:example.com
     > Email Address []:devnull@example.com
 
-* test.example.com.cert + test.example.com.privkey
+* test.example.com.crt + test.example.com.key
   * self signed certificate
   * covers test.example.com
   * `openssl req -newkey rsa:2048 -nodes -keyout test.example.com.key -x509 -days 365000 -out test.example.com.crt`
@@ -24,3 +24,8 @@ These Certificates and Keys are used for tests.
     > Common Name (e.g. server FQDN or YOUR name) []:test.example.com
     > Email Address []:devnull@example.com
 
+* _all.crt
+  * all certificates
+  * used for `lua_ssl_trusted_certificate` in tests
+  * `cat example.com.crt test.example.com.crt  > _all.crt`
+  

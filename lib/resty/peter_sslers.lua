@@ -51,6 +51,9 @@ local cert_cache_duration = 600
 local lru_cache_duration = 60
 local lru_maxitems = 200  -- allow up to 200 items in the cache
 local allowed_redis_strategy = {1, 2, }
+local redis_ip = '127.0.0.1'
+local redis_port = '6379'
+local redis_db_number = 9
 local _VERSION = '0.5.0'
 
 
@@ -323,6 +326,14 @@ local function get_cert_lrucache(server_name)
 end
 
 
+local function redis_update_defaults(_redis_ip, _redis_port, _redis_db_number)
+    -- override system defaults
+    redis_ip = _redis_ip
+    redis_port = _redis_port
+    redis_db_number = _redis_db_number
+end
+
+
 local function get_redcon()
     -- this sets up our redis connection
     -- it checks to see if it is a pooled connection (ie, reused),
@@ -330,18 +341,18 @@ local function get_redcon()
     -- Setup Redis connection
     local redcon = redis:new()
     -- Connect to redis.  NOTE: this is a pooled connection
-    local ok, err = redcon:connect("127.0.0.1", "6379")
+    local ok, err = redcon:connect(redis_ip, redis_port)
     if not ok then
         ngx_log(ngx_ERR, "Redis: failed to connect to redis: ", err)
         return nil, err
     end
-    -- Change the redis DB to #9
+    -- Change the redis DB to the port
     -- We only have to do this on new connections
     local times
     times, err = redcon:get_reused_times()
     if times <= 0 then
-        ngx_log(ngx_NOTICE, "Redis: changing to db 9: ", times)
-        redcon:select(9)
+        ngx_log(ngx_DEBUG, "Redis: changing to db:", redis_db_number, ", times:", times)
+        redcon:select(redis_db_number)
     end
     return redcon
 end
@@ -364,7 +375,7 @@ local function prime_1__query_redis(redcon, _server_name)
     -- returns `certificate_pairing()` or `nil`
     -- If the cert isn't in the cache, attept to retrieve from Redis
     ngx_log(ngx_DEBUG, "Redis: prime_1__query_redis : ", _server_name)
-    local key_domain = "d:" .. _server_name
+    local key_domain = "d1:" .. _server_name
     local domain_data, err = redcon:hmget(key_domain, 'c', 'p', 'i')
     if domain_data == nil then
         ngx_log(ngx_DEBUG,
@@ -387,7 +398,7 @@ local function prime_1__query_redis(redcon, _server_name)
     local id_cert = domain_data[1]
     local id_pkey = domain_data[2]
     local id_cacertchain = domain_data[3]
-
+    
     -- conditional logging
     -- ngx_log(ngx_DEBUG, "prime_1__query_redis")
     -- ngx_log(ngx_DEBUG, "id_cert ", id_cert)
@@ -395,7 +406,7 @@ local function prime_1__query_redis(redcon, _server_name)
     -- ngx_log(ngx_DEBUG, "id_cacertchain ", id_cacertchain)
 
     if id_cert == ngx_null or id_pkey == ngx_null or id_cacertchain == ngx_null then
-        ngx_log(ngx_DEBUG,
+        ngx_log(ngx_ERR,
             "Redis: `id_cert == ngx_null or id_pkey == ngx_null or " ..
             "id_cacertchain == ngx_null for domain(", key_domain, ")"
         )
@@ -405,27 +416,27 @@ local function prime_1__query_redis(redcon, _server_name)
     -- scoping
     local pkey, cert, cacertchain
 
-    pkey, err = redcon:get('p' .. id_pkey)
-    if pkey == nil then
-        ngx_log(ngx_DEBUG,
+    pkey, err = redcon:get('p:' .. id_pkey)
+    if pkey == nil or pkey == ngx_null then
+        ngx_log(ngx_ERR,
             "Redis: failed to retreive pkey (", id_pkey, ") for domain (",
             key_domain, ") Err: ", err
         )
         return nil
     end
 
-    cert, err = redcon:get('c' .. id_cert)
+    cert, err = redcon:get('c:' .. id_cert)
     if cert == nil or cert == ngx_null then
-        ngx_log(ngx_DEBUG,
+        ngx_log(ngx_ERR,
             "Redis: failed to retreive certificate (", id_cert,
             ") for domain (", key_domain, ") Err: ", err
         )
         return nil
     end
 
-    cacertchain, err = redcon:get('i' .. id_cacertchain)
+    cacertchain, err = redcon:get('i:' .. id_cacertchain)
     if cacertchain == nil or cacertchain == ngx_null then
-        ngx_log(ngx_DEBUG,
+        ngx_log(ngx_ERR,
             "Redis: failed to retreive ca certificate (", id_cacertchain,
             ") for domain (", key_domain, ") Err: ", err
         )
@@ -445,7 +456,7 @@ local function prime_2__query_redis(redcon, _server_name)
     ngx_log(ngx_DEBUG,
         "Redis: prime_2__query_redis : ", _server_name
     )
-    local key_domain = _server_name
+    local key_domain = "d2:" .. _server_name
     local domain_data, err = redcon:hmget(key_domain, 'p', 'f')
     if domain_data == nil then
         ngx_log(ngx_DEBUG,
@@ -582,6 +593,7 @@ local function set_ssl_certificate(
             return
         end
     else
+        ngx_log(ngx_DEBUG, "cert_lrucache MISS for : ", server_name)
         -- if the cert is unknown to the worker...
         -- now we check the fallback system
 
@@ -650,6 +662,8 @@ local function set_ssl_certificate(
             end
 
             -- use a fallback search?
+            -- checking for nil first is cheaper than checking
+            -- `certificate_pairing_data`
             if fallback_server ~= nil then
                 if not certificate_pairing_data(certificate_pem) then
                     if enable_autocert ~= nil then
@@ -845,6 +859,11 @@ local function expire_ssl_certs()
     return
 end
 
+-- needed for tests:
+-- * certificate_pairing
+-- * certificate_pairing_pem_to_cdata
+-- * set_cert_lrucache
+-- * set_cert_sharedcache
 
 local _M = {get_redcon = get_redcon,
             redis_keepalive = redis_keepalive,
@@ -855,6 +874,11 @@ local _M = {get_redcon = get_redcon,
             set_ssl_certificate = set_ssl_certificate,
             expire_ssl_certs = expire_ssl_certs,
             status_ssl_certs = status_ssl_certs,
+
+            certificate_pairing = certificate_pairing,
+            certificate_pairing_pem_to_cdata = certificate_pairing_pem_to_cdata,
+            set_cert_lrucache = set_cert_lrucache,
+            set_cert_sharedcache = set_cert_sharedcache,
 
             initialize_worker = initialize_worker,
             initialize = initialize,
