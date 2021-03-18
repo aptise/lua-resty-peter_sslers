@@ -51,7 +51,7 @@ local cert_cache_duration = 600
 local lru_cache_duration = 60
 local lru_maxitems = 200  -- allow up to 200 items in the cache
 local allowed_redis_strategy = {1, 2, }
-local redis_ip = '127.0.0.1'
+local redis_server = '127.0.0.1'
 local redis_port = '6379'
 local redis_db_number = 9
 local _VERSION = '0.5.0'
@@ -326,9 +326,9 @@ local function get_cert_lrucache(server_name)
 end
 
 
-local function redis_update_defaults(_redis_ip, _redis_port, _redis_db_number)
+local function redis_update_defaults(_redis_server, _redis_port, _redis_db_number)
     -- override system defaults
-    redis_ip = _redis_ip
+    redis_server = _redis_server
     redis_port = _redis_port
     redis_db_number = _redis_db_number
 end
@@ -341,7 +341,7 @@ local function get_redcon()
     -- Setup Redis connection
     local redcon = redis:new()
     -- Connect to redis.  NOTE: this is a pooled connection
-    local ok, err = redcon:connect(redis_ip, redis_port)
+    local ok, err = redcon:connect(redis_server, redis_port)
     if not ok then
         ngx_log(ngx_ERR, "Redis: failed to connect to redis: ", err)
         return nil, err
@@ -867,6 +867,7 @@ end
 
 local _M = {get_redcon = get_redcon,
             redis_keepalive = redis_keepalive,
+            redis_update_defaults = redis_update_defaults, 
             prime_1__query_redis = prime_1__query_redis,
             prime_2__query_redis = prime_2__query_redis,
             query_api_upstream = query_api_upstream,

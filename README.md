@@ -51,13 +51,13 @@ block.
 
 The library defaults to use the following information for redis:
 
-	local redis_ip = '127.0.0.1'
+	local redis_server = '127.0.0.1'
 	local redis_port = '6379'
 	local redis_db_number = 9
 
 This can be altered using "redis_update_defaults"
 
-	redis_update_defaults(_redis_ip, _redis_port, _redis_db_number)
+	redis_update_defaults(_redis_server, _redis_port, _redis_db_number)
 
 This function is NOT currently tested.
 
