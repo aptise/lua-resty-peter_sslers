@@ -49,6 +49,8 @@ jobs:
       image: openresty/openresty:${{ matrix.openresty_version }}-alpine-fat
       # --init runs tinit as PID 1 and prevents the 'WARNING: killing the child process' spam from the test suite
       options: --init
+      ports:
+        - 6379:6379
 
     steps:
     - name: Install deps
@@ -80,8 +82,6 @@ jobs:
       env:
         TEST_COVERAGE: '1'
       run: |
-         ps aux
-         redis-cli
          /usr/bin/prove -I../test-nginx/lib -r t/
 
     - name: Coverage
