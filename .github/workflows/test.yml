@@ -29,6 +29,22 @@ jobs:
 
     runs-on: ubuntu-latest
 
+    # Service containers to run with `container-job`
+    services:
+      # Label used to access the service container
+      redis:
+        # Docker Hub image
+        image: redis
+        # Set health checks to wait until redis has started
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          # Maps port 6379 on service container to the host
+          - 6379:6379
+
     container:
       image: openresty/openresty:${{ matrix.openresty_version }}-alpine-fat
       # --init runs tinit as PID 1 and prevents the 'WARNING: killing the child process' spam from the test suite
@@ -37,7 +53,7 @@ jobs:
     steps:
     - name: Install deps
       run: |
-        apk add --no-cache curl perl bash wget git perl-dev libarchive-tools redis
+        apk add --no-cache curl perl bash wget git perl-dev libarchive-tools
         ln -s /usr/bin/bsdtar /usr/bin/tar
         opm get ledgetech/lua-resty-http
 
@@ -64,7 +80,7 @@ jobs:
       env:
         TEST_COVERAGE: '1'
       run: |
-         ps aux | grep redis
+         ps aux
          /usr/bin/prove -I../test-nginx/lib -r t/
 
     - name: Coverage
