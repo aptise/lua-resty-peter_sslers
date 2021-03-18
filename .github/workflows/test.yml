@@ -24,19 +24,18 @@ jobs:
     strategy:
       matrix:
         openresty_version:
-          # - 1.17.8.1
+          - 1.17.8.1
           - 1.19.3.1
 
     runs-on: ubuntu-latest
 
-    # Service containers to run
+    container:
+      image: openresty/openresty:${{ matrix.openresty_version }}-alpine-fat
+      # --init runs tinit as PID 1 and prevents the 'WARNING: killing the child process' spam from the test suite
+      options: --init
+
+    # Service containers to run with `container-job`
     services:
-    
-      openresty:
-        image: openresty/openresty:${{ matrix.openresty_version }}-alpine-fat
-        # --init runs tinit as PID 1 and prevents the 'WARNING: killing the child process' spam from the test suite
-        options: --init
-    
       # Label used to access the service container
       redis:
         # Docker Hub image
@@ -80,6 +79,10 @@ jobs:
     - name: Run tests
       env:
         TEST_COVERAGE: '1'
+        # use mongodb for the host here because we have specified a container for the job.
+        # If we were running the job on the VM this would be localhost
+        REDIS_HOST: redis
+        REDIS_PORT: ${{ job.services.redis.ports[6379] }}
       run: |
          /usr/bin/prove -I../test-nginx/lib -r t/
 

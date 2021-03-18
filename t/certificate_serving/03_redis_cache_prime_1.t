@@ -8,6 +8,9 @@ $ENV{TEST_COVERAGE} ||= 0;
 $ENV{TEST_NGINX_HTML_DIR} ||= html_dir();
 $ENV{TEST_NGINX_SERVER_SSL_PORT} ||= 12345;
 
+$ENV{REDIS_HOST} ||= "127.0.0.1";
+$ENV{REDIS_PORT} ||= "6379";
+
 our $HttpConfig_1 = qq{
     lua_package_path "$pwd/lib/?.lua;;";
     error_log logs/error.log debug;
@@ -32,7 +35,7 @@ our $HttpConfig_1 = qq{
 
             -- requirements
             local ssl_certhandler = require "resty.peter_sslers"
-            ssl_certhandler.redis_update_defaults("localhost", "6379", 9)
+            ssl_certhandler.redis_update_defaults("$ENV{REDIS_HOST}", "$ENV{REDIS_PORT}", 9)
 
 			-- PRIME START
 			-- load the cert into the Redis cache
