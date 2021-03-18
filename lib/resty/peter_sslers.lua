@@ -867,7 +867,7 @@ end
 
 local _M = {get_redcon = get_redcon,
             redis_keepalive = redis_keepalive,
-            redis_update_defaults = redis_update_defaults, 
+            redis_update_defaults = redis_update_defaults,
             prime_1__query_redis = prime_1__query_redis,
             prime_2__query_redis = prime_2__query_redis,
             query_api_upstream = query_api_upstream,
