@@ -64,6 +64,7 @@ jobs:
       env:
         TEST_COVERAGE: '1'
       run: |
+         ps aux | grep redis
          /usr/bin/prove -I../test-nginx/lib -r t/
 
     - name: Coverage
