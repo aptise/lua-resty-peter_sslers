@@ -1,12 +1,26 @@
 These Certificates and Keys are used for tests.
 
-Some are from the PeterSSLers main project's test suite.
-Some are from OpenResty's test suite.
+* example.com.cert + example.com.privkey
+  * self signed certificate
+  * covers example.com
+  * `openssl req -newkey rsa:2048 -nodes -keyout example.com.key -x509 -days 365000 -out example.com.crt`
+  * > Country Name (2 letter code) [AU]:US
+    > State or Province Name (full name) [Some-State]:
+    > Locality Name (eg, city) []:
+    > Organization Name (eg, company) [Internet Widgits Pty Ltd]:Aptise     
+    > Organizational Unit Name (eg, section) []:PeterSSLers        
+    > Common Name (e.g. server FQDN or YOUR name) []:example.com
+    > Email Address []:devnull@example.com
 
+* test.example.com.cert + test.example.com.privkey
+  * self signed certificate
+  * covers test.example.com
+  * `openssl req -newkey rsa:2048 -nodes -keyout test.example.com.key -x509 -days 365000 -out test.example.com.crt`
+  * > Country Name (2 letter code) [AU]:US
+    > State or Province Name (full name) [Some-State]:
+    > Locality Name (eg, city) []:
+    > Organization Name (eg, company) [Internet Widgits Pty Ltd]:Aptise     
+    > Organizational Unit Name (eg, section) []:PeterSSLers        
+    > Common Name (e.g. server FQDN or YOUR name) []:test.example.com
+    > Email Address []:devnull@example.com
 
-* ssl_selfsigned_fullchain.pem - https://github.com/aptise/peter_sslers/tree/main/tests/test_configuration/ssl_selfsigned_fullchain.pem
-* ssl_selfsigned_privkey.pem - https://github.com/aptise/peter_sslers/tree/main/tests/test_configuration/ssl_selfsigned_privkey.pem
-* test.crt - https://github.com/openresty/lua-nginx-module/blob/master/t/cert/test.crt
-* test.key - https://github.com/openresty/lua-nginx-module/blob/master/t/cert/test.key
-* test2.crt - https://github.com/openresty/lua-nginx-module/blob/master/t/cert/test2.crt
-* test2.key - https://github.com/openresty/lua-nginx-module/blob/master/t/cert/test2.key

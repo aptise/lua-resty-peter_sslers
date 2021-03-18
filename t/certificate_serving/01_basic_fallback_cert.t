@@ -41,8 +41,8 @@ our $HttpConfig = qq{
 			local enable_autocert = nil
 			ssl_certhandler_set(redis_strategy, fallback_server, enable_autocert)
 		}
-		ssl_certificate ../../cert/ssl_selfsigned_fullchain.pem;
-		ssl_certificate_key ../../cert/ssl_selfsigned_privkey.pem;
+		ssl_certificate ../../cert/example.com.crt;
+		ssl_certificate_key ../../cert/example.com.key;
         server_tokens off;
         location /actual-test {
             default_type 'text/plain';
@@ -52,7 +52,7 @@ our $HttpConfig = qq{
 	}
 };
 our $Config = qq{
-    lua_ssl_trusted_certificate ../../cert/ssl_selfsigned_fullchain.pem;
+    lua_ssl_trusted_certificate ../../cert/example.com.crt;
 	server_tokens off;
 	location /t {
         content_by_lua_block {
