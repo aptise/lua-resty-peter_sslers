@@ -29,13 +29,14 @@ jobs:
 
     runs-on: ubuntu-latest
 
-    container:
-      image: openresty/openresty:${{ matrix.openresty_version }}-alpine-fat
-      # --init runs tinit as PID 1 and prevents the 'WARNING: killing the child process' spam from the test suite
-      options: --init
-
-    # Service containers to run with `container-job`
+    # Service containers to run
     services:
+    
+      openresty:
+        image: openresty/openresty:${{ matrix.openresty_version }}-alpine-fat
+        # --init runs tinit as PID 1 and prevents the 'WARNING: killing the child process' spam from the test suite
+        options: --init
+    
       # Label used to access the service container
       redis:
         # Docker Hub image
