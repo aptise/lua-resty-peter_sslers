@@ -81,6 +81,7 @@ jobs:
         TEST_COVERAGE: '1'
       run: |
          ps aux
+         redis-cli
          /usr/bin/prove -I../test-nginx/lib -r t/
 
     - name: Coverage
