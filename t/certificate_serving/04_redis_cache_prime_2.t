@@ -45,20 +45,9 @@ our $HttpConfig_2 = qq{
 			certificate_pem['pkey'] = f:read("*all")
 			f:close()           
 
-			local redis = require "resty.redis"
-			local redcon = redis:new()
-			local ok, err = redcon:connect("127.0.0.1", "6379")
-			if not ok then
-	            ngx.log(ngx.ERR, "failed to connect: ", err)
-				ngx.say("failed to connect: ", err)
-				return
-			end
-			ok, err = redcon:select(9)
-			if not ok then
-	            ngx.log(ngx.ERR, "failed to select: ", err)
-				ngx.say("failed to select: ", err)
-				return
-			end
+			-- use the packages redis connection
+			local redcon = ssl_certhandler.get_redcon()
+
 			-- 1. prime domain
 			-- prime domain: A- core entry
 			local key = "d2:test.example.com"
