@@ -70,6 +70,8 @@ jobs:
       run: |
          /usr/bin/prove -I../test-nginx/lib -r t/
          /usr/bin/prove -I../test-nginx/lib -r t/certificate_serving/04_redis_cache_prime_2.t 
+         cat t/servroot/logs/error.log 
+
 
     - name: Coverage
       run: |
