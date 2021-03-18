@@ -25,7 +25,7 @@ our $HttpConfig = qq{
 	}
     server {
         listen unix:$ENV{TEST_NGINX_HTML_DIR}/nginx.sock ssl;
-        server_name test.com;
+        server_name example.com;
 		ssl_certificate_by_lua_block  {
             ngx.log(ngx.ERR, "server: ssl_certhandler")
 
@@ -41,14 +41,40 @@ our $HttpConfig = qq{
 			local enable_autocert = nil
 			ssl_certhandler_set(redis_strategy, fallback_server, enable_autocert)
 		}
-		ssl_certificate ../../cert/test2.crt;
-		ssl_certificate_key ../../cert/test2.key;
+		ssl_certificate ../../cert/ssl_selfsigned_fullchain.pem;
+		ssl_certificate_key ../../cert/ssl_selfsigned_privkey.pem;
         server_tokens off;
         location /actual-test {
             default_type 'text/plain';
             content_by_lua_block { ngx.status = 201 ngx.say("actual-test") ngx.exit(201) }
             more_clear_headers Date;
         }
+	}
+};
+our $Config = qq{
+    lua_ssl_trusted_certificate ../../cert/ssl_selfsigned_fullchain.pem;
+	server_tokens off;
+	location /t {
+        content_by_lua_block {
+            ngx.log(ngx.ERR, "server: test server")
+            do
+                local sock = ngx.socket.tcp()
+                sock:settimeout(2000)
+                local ok, err = sock:connect("unix:$ENV{TEST_NGINX_HTML_DIR}/nginx.sock")
+                if not ok then
+                    ngx.say("failed to connect: ", err)
+                    return
+                end
+                ngx.say("connected: ", ok)
+                local sess, err = sock:sslhandshake(nil, "example.com", true)
+                if not sess then
+                    ngx.say("failed to do SSL handshake: ", err)
+                    return
+                end
+                ngx.say("SSL handshake OK!")
+            end  -- do
+            -- collectgarbage()
+		}
 	}
 };
 no_long_string();
@@ -59,42 +85,24 @@ run_tests();
 __DATA__
 === TEST 1: simple cert, one nginx server queries the other
 --- http_config eval: $::HttpConfig
---- config
-    lua_ssl_trusted_certificate ../../cert/test.crt;
-	server_tokens off;
-	location /t {
-        content_by_lua_block {
-            ngx.log(ngx.ERR, "server: test server")
-            do
-                local sock = ngx.socket.tcp()
-                sock:settimeout(2000)
-                local ok, err = sock:connect("unix:$TEST_NGINX_HTML_DIR/nginx.sock")
-                if not ok then
-                    ngx.say("failed to connect: ", err)
-                    return
-                end
-                ngx.say("connected: ", ok)
-                local sess, err = sock:sslhandshake(nil, "test.com", true)
-                if not sess then
-                    ngx.say("failed to do SSL handshake: ", err)
-                    return
-                end
-            end  -- do
-            -- collectgarbage()
-		}
-	}
+--- config eval: $::Config
 --- request
 GET /t
 --- response_body
 connected: 1
-failed to do SSL handshake: 18: self signed certificate
+SSL handshake OK!
 --- error_log
 [notice]
 peter_sslers.initialize
 peter_sslers.initialize_worker
 [debug]
 set_ssl_certificate
-ssl_certhandler_set(): set_ssl_certificate : test.com
-ssl_certhandler_set(): SNI Lookup for : test.com
-ssl_certhandler_set(): shared `cert_cache` MISS for : test.com
-ssl_certhandler_set(): failed to retrieve PEM for : test.com
+ssl_certhandler_set(): set_ssl_certificate : example.com
+ssl_certhandler_set(): SNI Lookup for : example.com
+ssl_certhandler_set(): shared `cert_cache` MISS for : example.com
+ssl_certhandler_set(): failed to retrieve PEM for : example.com
+--- no_error_log
+cert_lrucache HIT for : example.com
+shared `cert_cache` HIT for : example.com
+failed to set ssl private key : example.com
+set ssl private key : example.com
