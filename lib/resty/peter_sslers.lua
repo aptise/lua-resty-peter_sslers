@@ -398,7 +398,7 @@ local function prime_1__query_redis(redcon, _server_name)
     local id_cert = domain_data[1]
     local id_pkey = domain_data[2]
     local id_cacertchain = domain_data[3]
-    
+
     -- conditional logging
     -- ngx_log(ngx_DEBUG, "prime_1__query_redis")
     -- ngx_log(ngx_DEBUG, "id_cert ", id_cert)
