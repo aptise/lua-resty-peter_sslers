@@ -9,6 +9,16 @@ on:
         - '*.md'
 
 jobs:
+  luacheck:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+    - uses: leafo/gh-actions-lua@v8
+      with:
+        luaVersion: "luajit-openresty"
+    - uses: leafo/gh-actions-luarocks@v4
+    - run: luarocks install luacheck
+    - run: luacheck lib --no-unused
 
   run_tests:
     strategy:
@@ -30,10 +40,11 @@ jobs:
         ln -s /usr/bin/bsdtar /usr/bin/tar
         opm get ledgetech/lua-resty-http
 
-    - name: Start Redis
-      uses: supercharge/redis-github-action@1.2.0
-      with:
-        redis-version: ${{ matrix.redis-version }}
+    - name: Install Redis
+      # several tests require Redis
+      # note: if tests hang, it could be because the Redis version has changed
+      run: |
+        sudo apt-get install redis
 
     - name: Install CPAN
       run: curl -s -L http://xrl.us/cpanm > /bin/cpanm && chmod +x /bin/cpanm
@@ -59,16 +70,6 @@ jobs:
         TEST_COVERAGE: '1'
       run: |
          /usr/bin/prove -I../test-nginx/lib -r t/
-      continue-on-error: true
-
-    - name: Fail Test
-      run: |
-         /usr/bin/prove -I../test-nginx/lib -r t/certificate_serving/04_redis_cache_prime_2.t 
-      continue-on-error: true
-
-    - name: Show Failed Test
-      run: |
-         cat t/servroot/logs/error.log 
 
     - name: Coverage
       run: |
