@@ -69,9 +69,15 @@ jobs:
         TEST_COVERAGE: '1'
       run: |
          /usr/bin/prove -I../test-nginx/lib -r t/
+
+    - name: Show Failed Test A
+      run: |
          /usr/bin/prove -I../test-nginx/lib -r t/certificate_serving/04_redis_cache_prime_2.t 
          cat t/servroot/logs/error.log 
 
+    - name: Show Failed Test B
+      run: |
+         cat t/servroot/logs/error.log 
 
     - name: Coverage
       run: |
