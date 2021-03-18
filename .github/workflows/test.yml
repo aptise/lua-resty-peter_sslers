@@ -1,13 +1,12 @@
-# originally copied from
+# copied from
 # https://github.com/ledgetech/lua-resty-http/blob/master/.github/workflows/test.yml
 
 name: Test
 
 on:
   push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
+    paths-ignore: # Skip if only docs are updated
+        - '*.md'
 
 jobs:
   luacheck:
@@ -22,12 +21,13 @@ jobs:
     - run: luacheck lib --no-unused
 
   run_tests:
-    runs-on: ubuntu-latest
     strategy:
       matrix:
         openresty_version:
           - 1.17.8.1
           - 1.19.3.1
+
+    runs-on: ubuntu-latest
 
     container:
       image: openresty/openresty:${{ matrix.openresty_version }}-alpine-fat
@@ -36,7 +36,6 @@ jobs:
 
     steps:
     - name: Install deps
-      # several tests require Redis
       run: |
         apk add --no-cache curl perl bash wget git perl-dev libarchive-tools redis
         ln -s /usr/bin/bsdtar /usr/bin/tar
