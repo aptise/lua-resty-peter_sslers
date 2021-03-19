@@ -79,6 +79,10 @@ jobs:
          cat t/servroot/logs/error.log
       continue-on-error: true
 
+    - name: SHOW ME THE config
+      run: |
+         cat t/servroot/conf/nginx.conf 
+      continue-on-error: true
 
     - name: Coverage
       run: |
