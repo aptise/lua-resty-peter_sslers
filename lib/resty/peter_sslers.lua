@@ -1,11 +1,13 @@
 -- The includes
--- we may not need resty.http,
--- but including it here is better for memory if we need it
+-- "local ngx" is needed for coverage
+local ngx = ngx
 local cjson_safe = require "cjson.safe"
 local lrucache = require "resty.lrucache"
 local redis = require "resty.redis"
 local ssl = require "ngx.ssl"
 
+-- we may not need resty.http,
+-- but including it here is better for memory if we need it
 -- this is the pintsized library
 local http = require "resty.http"
 
@@ -16,6 +18,7 @@ local cjson_null = cjson_safe.null
 local http_new = http.new
 local ngx_DEBUG = ngx.DEBUG
 local ngx_ERR = ngx.ERR
+local ngx_header = ngx.header
 local ngx_log = ngx.log
 local ngx_NOTICE = ngx.NOTICE
 local ngx_null = ngx.null
@@ -48,11 +51,15 @@ local cert_cache_duration = 600
 local lru_cache_duration = 60
 local lru_maxitems = 200  -- allow up to 200 items in the cache
 local allowed_redis_strategy = {1, 2, }
-local VERSION = "0.4.2"
+local redis_server = '127.0.0.1'
+local redis_port = '6379'
+local redis_db_number = 9
+local _VERSION = '0.5.0'
 
 
 local function initialize()
-    ngx_log(ngx_NOTICE, "ssl_certhandler.initialize")
+    ngx_log(ngx_NOTICE, "peter_sslers.initialize")
+    -- we currently use `initialize_worker`, but this may be used in the future
     return true
 end
 
@@ -60,7 +67,7 @@ end
 local function initialize_worker(
     _cert_cache_duration, _lru_cache_duration, _lru_maxitems
     )
-    ngx_log(ngx_NOTICE, "ssl_certhandler.initialize_worker")
+    ngx_log(ngx_NOTICE, "peter_sslers.initialize_worker")
 
     -- copy overrides
     cert_cache_duration = _cert_cache_duration or cert_cache_duration
@@ -68,15 +75,15 @@ local function initialize_worker(
     lru_maxitems = _lru_maxitems or lru_maxitems
 
     ngx_log(ngx_NOTICE,
-        "ssl_certhandler.initialize_worker | cert_cache_duration ",
+        "peter_sslers.initialize_worker | cert_cache_duration ",
         cert_cache_duration
     )
     ngx_log(ngx_NOTICE,
-        "ssl_certhandler.initialize_worker | lru_cache_duration ",
+        "peter_sslers.initialize_worker | lru_cache_duration ",
         lru_cache_duration
     )
     ngx_log(ngx_NOTICE,
-        "ssl_certhandler.initialize_worker | lru_maxitems ",
+        "peter_sslers.initialize_worker | lru_maxitems ",
         lru_maxitems
     )
 
@@ -124,8 +131,8 @@ local function api_response_to_cert(server_name, response, cert_preferences)
                 -- default cert_preferences
                 if cert_preferences == nil then
                     cert_preferences = {
-                        'server_certificate__latest_multi',
-                        'server_certificate__latest_single'
+                        'certificate_signed__latest_multi',
+                        'certificate_signed__latest_single'
                     }
                 end
                 for index, value in next, cert_preferences do
@@ -319,6 +326,14 @@ local function get_cert_lrucache(server_name)
 end
 
 
+local function redis_update_defaults(_redis_server, _redis_port, _redis_db_number)
+    -- override system defaults
+    redis_server = _redis_server
+    redis_port = _redis_port
+    redis_db_number = _redis_db_number
+end
+
+
 local function get_redcon()
     -- this sets up our redis connection
     -- it checks to see if it is a pooled connection (ie, reused),
@@ -326,18 +341,19 @@ local function get_redcon()
     -- Setup Redis connection
     local redcon = redis:new()
     -- Connect to redis.  NOTE: this is a pooled connection
-    local ok, err = redcon:connect("127.0.0.1", "6379")
+    ngx_log(ngx_DEBUG, "Redis: about to connect to redis: ", redis_server, ":", redis_port)
+    local ok, err = redcon:connect(redis_server, redis_port)
     if not ok then
         ngx_log(ngx_ERR, "Redis: failed to connect to redis: ", err)
         return nil, err
     end
-    -- Change the redis DB to #9
+    -- Change the redis DB to the port
     -- We only have to do this on new connections
     local times
     times, err = redcon:get_reused_times()
     if times <= 0 then
-        ngx_log(ngx_NOTICE, "Redis: changing to db 9: ", times)
-        redcon:select(9)
+        ngx_log(ngx_DEBUG, "Redis: changing to db:", redis_db_number, ", times:", times)
+        redcon:select(redis_db_number)
     end
     return redcon
 end
@@ -360,7 +376,7 @@ local function prime_1__query_redis(redcon, _server_name)
     -- returns `certificate_pairing()` or `nil`
     -- If the cert isn't in the cache, attept to retrieve from Redis
     ngx_log(ngx_DEBUG, "Redis: prime_1__query_redis : ", _server_name)
-    local key_domain = "d:" .. _server_name
+    local key_domain = "d1:" .. _server_name
     local domain_data, err = redcon:hmget(key_domain, 'c', 'p', 'i')
     if domain_data == nil then
         ngx_log(ngx_DEBUG,
@@ -382,54 +398,54 @@ local function prime_1__query_redis(redcon, _server_name)
     -- lua arrays are 1 based!
     local id_cert = domain_data[1]
     local id_pkey = domain_data[2]
-    local id_cacert = domain_data[3]
+    local id_cacertchain = domain_data[3]
 
     -- conditional logging
     -- ngx_log(ngx_DEBUG, "prime_1__query_redis")
     -- ngx_log(ngx_DEBUG, "id_cert ", id_cert)
     -- ngx_log(ngx_DEBUG, "id_pkey ", id_pkey)
-    -- ngx_log(ngx_DEBUG, "id_cacert ", id_cacert)
+    -- ngx_log(ngx_DEBUG, "id_cacertchain ", id_cacertchain)
 
-    if id_cert == ngx_null or id_pkey == ngx_null or id_cacert == ngx_null then
-        ngx_log(ngx_DEBUG,
+    if id_cert == ngx_null or id_pkey == ngx_null or id_cacertchain == ngx_null then
+        ngx_log(ngx_ERR,
             "Redis: `id_cert == ngx_null or id_pkey == ngx_null or " ..
-            "id_cacert == ngx_null for domain(", key_domain, ")"
+            "id_cacertchain == ngx_null for domain(", key_domain, ")"
         )
         return nil
     end
 
     -- scoping
-    local pkey, cert, cacert
+    local pkey, cert, cacertchain
 
-    pkey, err = redcon:get('p' .. id_pkey)
-    if pkey == nil then
-        ngx_log(ngx_DEBUG,
+    pkey, err = redcon:get('p:' .. id_pkey)
+    if pkey == nil or pkey == ngx_null then
+        ngx_log(ngx_ERR,
             "Redis: failed to retreive pkey (", id_pkey, ") for domain (",
             key_domain, ") Err: ", err
         )
         return nil
     end
 
-    cert, err = redcon:get('c' .. id_cert)
+    cert, err = redcon:get('c:' .. id_cert)
     if cert == nil or cert == ngx_null then
-        ngx_log(ngx_DEBUG,
+        ngx_log(ngx_ERR,
             "Redis: failed to retreive certificate (", id_cert,
             ") for domain (", key_domain, ") Err: ", err
         )
         return nil
     end
 
-    cacert, err = redcon:get('i' .. id_cacert)
-    if cacert == nil or cacert == ngx_null then
-        ngx_log(ngx_DEBUG,
-            "Redis: failed to retreive ca certificate (", id_cacert,
+    cacertchain, err = redcon:get('i:' .. id_cacertchain)
+    if cacertchain == nil or cacertchain == ngx_null then
+        ngx_log(ngx_ERR,
+            "Redis: failed to retreive ca certificate (", id_cacertchain,
             ") for domain (", key_domain, ") Err: ", err
         )
         return nil
     end
 
     local certificate_pem = certificate_pairing()
-          certificate_pem['cert'] = cert .. "\n" .. cacert
+          certificate_pem['cert'] = cert .. "\n" .. cacertchain
           certificate_pem['pkey'] = pkey
     return certificate_pem
 end
@@ -441,7 +457,7 @@ local function prime_2__query_redis(redcon, _server_name)
     ngx_log(ngx_DEBUG,
         "Redis: prime_2__query_redis : ", _server_name
     )
-    local key_domain = _server_name
+    local key_domain = "d2:" .. _server_name
     local domain_data, err = redcon:hmget(key_domain, 'p', 'f')
     if domain_data == nil then
         ngx_log(ngx_DEBUG,
@@ -540,8 +556,8 @@ local function set_ssl_certificate(
     -- fallback_server : http(s) server root for peter_sslers installation
     -- enable_autocert? : nil = NO; not-nil = YES
     -- cert_preferences : an array to attempt searching in payload
-    --                    should be {"server_certificate__latest_single",
-    --                               "server_certificate__latest_multi"}
+    --                    should be {"certificate_signed__latest_single",
+    --                               "certificate_signed__latest_multi"}
     --
     -- note: cache the cdata certs for no more than 60s
     -- these are PER-WORKER, and may stick around for this
@@ -578,6 +594,7 @@ local function set_ssl_certificate(
             return
         end
     else
+        ngx_log(ngx_DEBUG, "cert_lrucache MISS for : ", server_name)
         -- if the cert is unknown to the worker...
         -- now we check the fallback system
 
@@ -646,6 +663,8 @@ local function set_ssl_certificate(
             end
 
             -- use a fallback search?
+            -- checking for nil first is cheaper than checking
+            -- `certificate_pairing_data`
             if fallback_server ~= nil then
                 if not certificate_pairing_data(certificate_pem) then
                     if enable_autocert ~= nil then
@@ -735,7 +754,8 @@ end
 
 local function status_ssl_certs()
     ngx_log(ngx_NOTICE, "status_ssl_certs")
-    ngx.header.content_type = 'application/json'
+    ngx_header.content_type = 'application/json'
+    ngx_header["x-peter-sslers"] = _VERSION
     -- handmade json value
     local ks_valid = {}
     local ks_invalid = {}
@@ -800,7 +820,7 @@ local function status_ssl_certs()
                  ', "keys": ' .. ks .. ', "config": {"expiries": ' ..
                  expiries .. ', "maxitems": ' .. maxitems .. '}, "server": ' ..
                  '"peter_sslers:openresty", "server_version": "' ..
-                 VERSION .. '"}'
+                 _VERSION .. '"}'
     ngx_say(rval)
     return
 end
@@ -808,14 +828,15 @@ end
 
 local function expire_ssl_certs()
     ngx_log(ngx_NOTICE, "expire_ssl_certs")
-    ngx.header.content_type = 'application/json'
+    ngx_header.content_type = 'application/json'
+    ngx_header["x-peter-sslers"] = _VERSION
     local prefix = ngx_var.location
     if ngx_var.request_uri == prefix .. '/all' then
         cert_cache:flush_all()
         ngx_say(
             '{"result": "success", "expired": "all", ' ..
             '"server": "peter_sslers:openresty", ' ..
-            '"server_version": "' .. VERSION .. '"}'
+            '"server_version": "' .. _VERSION .. '"}'
         )
         return
     end
@@ -826,21 +847,28 @@ local function expire_ssl_certs()
         cert_cache:delete(_domain)
         ngx_say('{"result": "success", "expired": "domain", "domain": "' ..
                 _domain ..'", "server": "peter_sslers:openresty", ' ..
-                '"server_version": "' .. VERSION .. '"}'
+                '"server_version": "' .. _VERSION .. '"}'
                 )
         return
     end
+    ngx_log(ngx_ERR, "expire_ssl_certs - malformed request")
+    ngx.status = 404
     ngx_say('{"result": "error", "expired": "None", "reason": "Unknown URI"' ..
             ', "server": "peter_sslers:openresty", ' ..
-            '"server_version": "' .. VERSION .. '"}'
+            '"server_version": "' .. _VERSION .. '"}'
             )
-    ngx.status = 404
     return
 end
 
+-- needed for tests:
+-- * certificate_pairing
+-- * certificate_pairing_pem_to_cdata
+-- * set_cert_lrucache
+-- * set_cert_sharedcache
 
 local _M = {get_redcon = get_redcon,
             redis_keepalive = redis_keepalive,
+            redis_update_defaults = redis_update_defaults,
             prime_1__query_redis = prime_1__query_redis,
             prime_2__query_redis = prime_2__query_redis,
             query_api_upstream = query_api_upstream,
@@ -849,8 +877,14 @@ local _M = {get_redcon = get_redcon,
             expire_ssl_certs = expire_ssl_certs,
             status_ssl_certs = status_ssl_certs,
 
+            certificate_pairing = certificate_pairing,
+            certificate_pairing_pem_to_cdata = certificate_pairing_pem_to_cdata,
+            set_cert_lrucache = set_cert_lrucache,
+            set_cert_sharedcache = set_cert_sharedcache,
+
             initialize_worker = initialize_worker,
             initialize = initialize,
+            _VERSION = _VERSION,
             }
 
 return _M

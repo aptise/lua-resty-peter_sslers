@@ -7,9 +7,12 @@ OpenResty
 
 This package has been used in production since 2016
 
-The `0.4.0` release requires `peter_sslers >= 0.4.0`
+The `0.5.0` release requires `peter_sslers >= 0.5.0`
+
+The `0.4.0` release requires `peter_sslers >= 0.4.0, <0.5.0`
 
 Earlier releases require `peter_sslers < 0.4.0`
+
 
 # Installation
 
@@ -37,7 +40,7 @@ It supports "autocert" functionality with `peter_sslers`
 It is implemented as a library with some example scripts to invoke it.
 
 * core library
-  * `ssl_certhandler.lua`
+  * `peter_sslers.lua`
 * examples
   * `ssl_certhandler-lookup.lua`
   * `ssl_certhandler-expire.lua`
@@ -46,11 +49,17 @@ It is implemented as a library with some example scripts to invoke it.
 The `-lookup.lua`, `-expire.lua`,  `-status.lua` scripts can be copied into a
 block.
 
-The library is hardcoded to use db9 in redis.  if you want another option, edit
-or PR a fix on the line that looks like:
+The library defaults to use the following information for redis:
 
-	ngx.log(ngx.ERR, "changing to db 9: ", times)
-	redcon:select(9)
+	local redis_server = '127.0.0.1'
+	local redis_port = '6379'
+	local redis_db_number = 9
+
+This can be altered using "redis_update_defaults"
+
+	redis_update_defaults(_redis_server, _redis_port, _redis_db_number)
+
+This function is NOT currently tested.
 
 Redis is NOT required, but recommended.  Instead you can failover to directly
 query a peter_sslers pyramid instance.
@@ -75,9 +84,9 @@ In order to maximize performance there are 2 layers of caching WITHIN
 Nginx/OpenResty:
 
 * certificates are cached in a LRU cache within a given worker in the native
-  CDATA format for `ssl_certhandler.lru_cache_duration` seconds (default 60)
+  CDATA format for `peter_sslers.lru_cache_duration` seconds (default 60)
 * certificates are cached across all workers in PEM format for
-  `ssl_certhandler.cert_cache_duration` seconds (default 600)
+  `peter_sslers.cert_cache_duration` seconds (default 600)
 
 These values can be adjusted.
 
@@ -109,12 +118,12 @@ Make sure your Nginx contains:
 		lua_code_cache  on;
 		init_by_lua_block {
 			require "resty.core"
-			local ssl_certhandler = require "peter_sslers.ssl_certhandler"
+			local ssl_certhandler = require "resty.peter_sslers"
 			ssl_certhandler.initialize()
 		}
 		init_worker_by_lua_block {
 			require "resty.core"
-			local ssl_certhandler = require "peter_sslers.ssl_certhandler"
+			local ssl_certhandler = require "resty.peter_sslers"
 			-- cert_cache_duration, lru_cache_duration, lru_maxitems
 			ssl_certhandler.initialize_worker(90, 30, 200)
 		}
@@ -138,7 +147,7 @@ see:
 * https://github.com/openresty/lua-resty-redis/issues/33
 * https://github.com/openresty/lua-nginx-module/issues/376
 
-### ssl_certhandler.lua
+### resty/peter_sslers.lua
 
 Core library.  Exposes several functions.
 
@@ -168,7 +177,7 @@ Servers must be fully restarted to clear memory.
 The workaround?  API endpoints to "flush" the cache or expire certain
 keys(domains).
 
-A simple example is provided with `peter_sslers.ssl_certhandler-expire`,
+A simple example is provided with `examples/ssl_certhandler-expire`,
 which can be invoked within Nginx as-is rather easily:
 
 ````
@@ -181,7 +190,7 @@ which can be invoked within Nginx as-is rather easily:
 			location  /.peter_sslers/nginx/shared_cache/expire  {
 				content_by_lua_block  {
 					-- requirements
-					local ssl_certhandler = require "peter_sslers.ssl_certhandler"
+					local ssl_certhandler = require "resty.peter_sslers"
 
 					-- alias functions
 					local ssl_certhandler_expire = ssl_certhandler.expire_ssl_certs
@@ -224,7 +233,7 @@ The status route shows some info about the system
 			location  /.peter_sslers/nginx/shared_cache/status  {
 				content_by_lua_block  {
 					-- requirements
-					local ssl_certhandler = require "peter_sslers.ssl_certhandler"
+					local ssl_certhandler = require "resty.peter_sslers"
 
 					-- alias functions
 					local ssl_certhandler_status = ssl_certhandler.status_ssl_certs
@@ -242,7 +251,7 @@ This the core work:
 ````
         ssl_certificate_by_lua_block  {
             -- requirements
-            local ssl_certhandler = require "peter_sslers.ssl_certhandler"
+            local ssl_certhandler = require "resty.peter_sslers"
 
             -- alias functions
             local ssl_certhandler_set = ssl_certhandler.set_ssl_certificate
@@ -340,9 +349,64 @@ expire
 	curl -k https://peter:sslers@127.0.0.1/.peter_sslers/nginx/shared_cache/expire
 	
 	
+### Tests
+
+#### Luacheck
+
+The tests in `test.yml` disable unused variables:
+
+    - run: luacheck lib --no-unused
+
+To do local tests
+
+	luarocks install luacheck
+	luacheck lib
+
+#### Test::Nginx
+
+Upgrade CPAN
+
+	cpan
+	upgrade
+
+Install cpanm
+
+	cpan App::cpanminus
+
+Install the test harness
+
+	cpanm -q -n Test::Nginx
+
+
+Where is your openresty? Make sure it's in the path
+
+	export PATH=/usr/local/openresty/nginx/sbin:$PATH
+	export PATH=/usr/local/bin/:$PATH
+
+Run the test(s)
+
+	/usr/bin/prove -I../test-nginx/lib -r t/
 
 
 ### Known problems
+
+none!
+
+
+# Versioning
+
+This project uses Major.Minor.Path semantic versioning.
+
+Major.Minor version releases are pegged to the same Major.Minor releases as
+`lua-resty-peter__slers`.
+
+For example:
+
+| peter_sslers | lua-resty-peter_sslers | compatible ? |
+| --- | --- | --- |
+| 0.5.1 | 0.5.1 | YES |
+| 0.5.1 | 0.5.0 | YES. Patch version mismatch ok! |
+| 0.5.1 | 0.4.2 | NO. Minor version mismatch. |
 
 
 # Author
@@ -350,6 +414,10 @@ expire
 Jonathan Vanasco <jonathan@findmeon.com>
 
 Originally started in https://github.com/aptise/peter_sslers
+
+The tests and github actions are copied or inspired by the excellent lua-resty-http
+module https://github.com/ledgetech/lua-resty-http by James Hurst and the openresty
+test suites.
 
 
 # Licence
