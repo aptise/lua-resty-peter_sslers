@@ -41,6 +41,8 @@ jobs:
         ln -s /usr/bin/bsdtar /usr/bin/tar
         opm get ledgetech/lua-resty-http
         ps aux
+        rc-status --list
+        rc-status --manual
 
     - name: Install CPAN
       run: curl -s -L http://xrl.us/cpanm > /bin/cpanm && chmod +x /bin/cpanm
