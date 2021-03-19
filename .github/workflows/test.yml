@@ -26,6 +26,10 @@ jobs:
     steps:
     - uses: actions/checkout@v2
 
+    - name: Clear out old files?
+      run: |
+        sudo apt-get remove nginx
+
     - name: Install OpenResty
       # trying to get the openresty and redis containers to talk to each other was a nightmare
       run: |
