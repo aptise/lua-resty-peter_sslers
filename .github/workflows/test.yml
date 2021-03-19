@@ -50,7 +50,7 @@ jobs:
         sudo opm get ledgetech/lua-resty-http
 
     - name: Install CPAN
-      run: curl -s -L http://xrl.us/cpanm > /bin/cpanm && chmod +x /bin/cpanm
+      run: sudo curl -s -L http://xrl.us/cpanm > /bin/cpanm && sudo chmod +x /bin/cpanm
 
     - name: Cache
       uses: actions/cache@v2
@@ -61,10 +61,10 @@ jobs:
         key: ${{ runner.os }}-${{ matrix.openresty_version }}-cache
 
     - name: Install Test::Nginx
-      run: cpanm -q -n Test::Nginx
+      run: sudo cpanm -q -n Test::Nginx
 
     - name: Install Luacov
-      run: luarocks install luacov
+      run: sudo luarocks install luacov
 
     - name: Run tests
       env:
