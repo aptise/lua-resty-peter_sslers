@@ -79,12 +79,26 @@ jobs:
     - name: Run tests
       env:
         TEST_COVERAGE: '1'
-        # use mongodb for the host here because we have specified a container for the job.
+        # use redis for the host here because we have specified a container for the job.
         # If we were running the job on the VM this would be localhost
         REDIS_HOST: redis
         REDIS_PORT: ${{ job.services.redis.ports[6379] }}
       run: |
          /usr/bin/prove -I../test-nginx/lib -r t/
+      continue-on-error: true
+
+    - name: Run tests A again for cat
+      env:
+        TEST_COVERAGE: '1'
+      run: |
+         /usr/bin/prove -I../test-nginx/lib -r t/certificate_serving/03_redis_cache_prime_1.t
+      continue-on-error: true
+
+    - name: SHOW ME THE ERROR
+      run: |
+         cat t/servroot/logs/error.log
+      continue-on-error: true
+
 
     - name: Coverage
       run: |
