@@ -5,8 +5,9 @@ name: Test
 
 on:
   push:
-    paths-ignore: # Skip if only docs are updated
-        - '*.md'
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
 
 jobs:
   luacheck:
@@ -20,27 +21,33 @@ jobs:
     - run: luarocks install luacheck
     - run: luacheck lib --no-unused
 
-  run_tests:
-    strategy:
-      matrix:
-        openresty_version:
-          # - 1.17.8.1
-          - 1.19.3.1
-
+  build:
     runs-on: ubuntu-latest
 
-    container:
-      image: openresty/openresty:${{ matrix.openresty_version }}-alpine-fat
-      # --init runs tinit as PID 1 and prevents the 'WARNING: killing the child process' spam from the test suite
-      options: --init
-      ports:
-        - 6379:6379
-
     steps:
-    - name: Install deps
+    - uses: actions/checkout@v2
+
+    - name: Install OpenResty
+      # trying to get the openresty and redis containers to talk to each other was a nightmare
       run: |
-        apk add --no-cache curl perl bash wget git perl-dev libarchive-tools redis
-        ln -s /usr/bin/bsdtar /usr/bin/tar
+        # install OpenResty
+        sudo apt-get -y install --no-install-recommends wget gnupg ca-certificates
+        wget -O - https://openresty.org/package/pubkey.gpg | sudo apt-key add -
+        echo "deb http://openresty.org/package/ubuntu $(lsb_release -sc) main" | sudo tee /etc/apt/sources.list.d/openresty.list
+        sudo apt-get update
+        sudo apt-get -y install openresty
+        sudo systemctl stop openresty
+
+    - name: Install Redis
+      # several tests require Redis
+      # note: if tests hang, it could be because the Redis version has changed
+      run: |
+        sudo apt-get install redis luarocks
+
+    - name: Install Deps
+      run: |
+        sudo apt-get install perl perl-dev 
+        # our openesty depenedencies
         opm get ledgetech/lua-resty-http
 
     - name: Install CPAN
@@ -59,8 +66,6 @@ jobs:
 
     - name: Install Luacov
       run: luarocks install luacov
-
-    - uses: actions/checkout@v2
 
     - name: Run tests
       env:
