@@ -45,12 +45,9 @@ jobs:
 
     - name: Install Deps
       run: |
-        sudo apt-get install perl libperl-dev 
+        sudo apt-get install perl libperl-dev cpanminus
         # our openesty depenedencies
         sudo opm get ledgetech/lua-resty-http
-
-    - name: Install CPAN
-      run: sudo curl -s -L http://xrl.us/cpanm > /bin/cpanm && sudo chmod +x /bin/cpanm
 
     - name: Cache
       uses: actions/cache@v2
