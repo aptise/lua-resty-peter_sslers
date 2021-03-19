@@ -41,13 +41,17 @@ It is implemented as a library with some example scripts to invoke it.
 
 * core library
   * `peter_sslers.lua`
+
+Examples can be found in the `examples` directory, as well the extensive
+unit tests
+
 * examples
   * `ssl_certhandler-lookup.lua`
   * `ssl_certhandler-expire.lua`
   * `ssl_certhandler-status.lua`
 
-The `-lookup.lua`, `-expire.lua`,  `-status.lua` scripts can be copied into a
-block.
+The `-lookup.lua`, `-expire.lua`,  `-status.lua` scripts can be copied into an
+nginx/openresty server block. For reference, look at the test suite.
 
 The library defaults to use the following information for redis:
 
@@ -59,8 +63,6 @@ This can be altered using "redis_update_defaults"
 
 	redis_update_defaults(_redis_server, _redis_port, _redis_db_number)
 
-This function is NOT currently tested.
-
 Redis is NOT required, but recommended.  Instead you can failover to directly
 query a peter_sslers pyramid instance.
 
@@ -69,7 +71,10 @@ query a peter_sslers pyramid instance.
 invoke `ssl_certhandler_set` with `redis_strategy` as `nil`, instead of `1` or
 `2`. Simple!
 
-To use the Peter SSlers Pyramid fallback, the following library is used:
+### Pyramid Fallback
+
+To use the Peter SSlers Pyramid fallback for querying domains or autocert
+functionality, the following library is used:
 
 * lua-resty-http https://github.com/pintsized/lua-resty-http
 
@@ -78,14 +83,17 @@ If you need to remove values, you will need to restart the server OR use one of
 the Nginx/lua examples for cache clearing.  Fallback API requests will notify
 the Pyramid app that the request should have write-through cache behavior.
 
+Debugging statements are sent to the nginx server log, so fallback and autocert
+functions can be debugged by end users.
+
 ### Caching Note
 
 In order to maximize performance there are 2 layers of caching WITHIN
 Nginx/OpenResty:
 
-* certificates are cached in a LRU cache within a given worker in the native
+* Certificates are cached in a LRU cache within a given Worker in the native
   CDATA format for `peter_sslers.lru_cache_duration` seconds (default 60)
-* certificates are cached across all workers in PEM format for
+* Certificates are cached across all Workers in PEM format for
   `peter_sslers.cert_cache_duration` seconds (default 600)
 
 These values can be adjusted.
@@ -266,7 +274,9 @@ This the core work:
 
 ### fully configured example
 
-a fully configured example is available in the main peter_sslers repo: https://github.com/aptise/peter_sslers/blob/master/tools/nginx_conf/enabled.conf
+a fully configured example is available in the main peter_sslers repo:
+
+   * https://github.com/aptise/peter_sslers/blob/master/tools/nginx_conf/enabled.conf
 
 ### Details
 
