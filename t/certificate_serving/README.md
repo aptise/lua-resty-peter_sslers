@@ -44,7 +44,38 @@ The workaround is to define two servers within nginx:
   * `location /t` contains a `content_by_lua_block`, which is used to connect
     to Server A, and issues a request against `actual-test`
 
+The flow looks like this:
+
+* User requests http://B/t
+* B/t queries https://A/actual-test
+
+
 Both nginx servers will share the same log, so the `error_log` tests should be
 written to reflect that.  However, the `response_body` test will only check the
 "Server B" response.  The response for "Server A" can be checked within the Lua
 block in "Server B".
+
+In the case of Test 5 "API Fallback", two servers run 3 routes(!)
+
+* Server A 
+  * HTTPS
+  * SSL Server routines you want to test in `/actual-test`
+  * defined in `http_config`
+
+* Server B
+  * HTTP
+  * actually queried by the Test::Nginx file
+  * defined in `config`
+  * `location /t` contains a `content_by_lua_block`, which is used to connect
+    to Server A, and issues a request against `actual-test`
+  * `location /.well-known/admin/domain/test.example.com/config.json` contains a 
+    `content_by_lua_block`, which is queried during the ServerA SSL Handshake
+    to mimic the upstream Pyramid application
+    
+The flow looks like this:
+
+* User requests http://B/t
+* B/t queries https://A/actual-test
+* Within the SSL Handshake of A/actual-test, a query is sent to
+  http://B/.well-known/admin/domain/test.example.com/config.json    
+    
