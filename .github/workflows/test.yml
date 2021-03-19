@@ -1,4 +1,4 @@
-# copied from
+# based on
 # https://github.com/ledgetech/lua-resty-http/blob/master/.github/workflows/test.yml
 
 name: Test
@@ -37,6 +37,7 @@ jobs:
     steps:
     # redis-server and the conf are installed by the package
     # see https://pkgs.alpinelinux.org/contents?branch=edge&name=redis&arch=x86_64&repo=main
+    # this container doesn't seem to have the alpine linux start utilities, so daemonize it
     - name: Install deps
       run: |
         apk add --no-cache curl perl bash wget git perl-dev libarchive-tools redis
@@ -68,24 +69,6 @@ jobs:
         TEST_COVERAGE: '1'
       run: |
          /usr/bin/prove -I../test-nginx/lib -r t/
-      continue-on-error: true
-
-    - name: Run tests A again for cat
-      env:
-        TEST_COVERAGE: '1'
-      run: |
-         /usr/bin/prove -I../test-nginx/lib -r t/certificate_serving/03_redis_cache_prime_1.t
-      continue-on-error: true
-
-    - name: SHOW ME THE ERROR
-      run: |
-         cat t/servroot/logs/error.log
-      continue-on-error: true
-
-    - name: SHOW ME THE config
-      run: |
-         cat t/servroot/conf/nginx.conf 
-      continue-on-error: true
 
     - name: Coverage
       run: |
