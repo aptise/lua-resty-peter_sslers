@@ -171,6 +171,7 @@ shared `cert_cache` MISS for : test.example.com
 Redis: lookup enabled
 Redis: prime_1__query_redis : test.example.com
 caching PEM cert & key into the shared cache : test.example.com
+can provide ssl for : test.example.com
 caching cert & key cdata into the worker : test.example.com
 set ssl certificate : test.example.com
 set ssl private key : test.example.com

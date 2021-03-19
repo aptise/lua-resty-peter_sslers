@@ -115,19 +115,21 @@ local function api_response_to_cert(server_name, response, cert_preferences)
     -- response: api response via `httpc:request_uri(data_uri`
     -- returns: `certificate_pem`
     local cert, pkey
+    local certificate_pem = certificate_pairing()
 
     if not response then
-        ngx_log(ngx_ERR, 'API query - no response : ', server_name)
+        ngx_log(ngx_ERR, 'API response - no response : ', server_name)
     else
         -- scoping
         local body_value, err, status
 
         status = response.status
+        ngx_log(ngx_DEBUG, "API response - status : ", status)
         -- local headers = response.headers
         -- local body = response.body
         if status == 200 then
             body_value, err = cjson_safe_decode(response.body)
-            if body_value ~= nil then
+            if body_value ~= nil and err == nil then
                 -- default cert_preferences
                 if cert_preferences == nil then
                     cert_preferences = {
@@ -136,38 +138,54 @@ local function api_response_to_cert(server_name, response, cert_preferences)
                     }
                 end
                 for index, value in next, cert_preferences do
-                    if body_value[value] ~= cjson_null then
-                        cert = body_value[value]['fullchain']['pem']
-                        pkey = body_value[value]['private_key']['pem']
+                    local _bv = body_value[value]
+                    if _bv ~= cjson_null and _bv ~= nil then
+                        cert = _bv['fullchain']['pem']
+                        pkey = _bv['private_key']['pem']
                         break
                     end
                 end
+                -- these are for nginx logs
+                local _result = body_value["result"]
+                local _notes = body_value["notes"]
+                if _result ~= nil then
+                    ngx_log(ngx_DEBUG, "API response['result'] = ", _result)
+                end
+                if _notes ~= nil then
+                    ngx_log(ngx_DEBUG, "API response['notes'] = ", _notes)
+                end
+                if body_value["instructions"] ~= nil then
+                    ngx_log(ngx_DEBUG, "API response['instructions'] IS NOT NULL. ERROR")
+                end
+                if body_value["form_errors"] ~= nil then
+                    ngx_log(ngx_DEBUG, "API response['form_errors'] IS NOT NULL. ERROR")
+                end
+            else
+                ngx_log(ngx_DEBUG, "ERROR:", err, ' or body_value == nil')
             end
         elseif status == 404 then
-            ngx_log(ngx_DEBUG, "API query 404 : ", server_name)
+            ngx_log(ngx_DEBUG, "API response 404 : ", server_name)
             body_value, err = cjson_safe_decode(response.body)
             if body_value ~= nil then
                 -- we expect a 'message' field
                 ngx_log(ngx_DEBUG,
-                    "API query error : ", server_name,
+                    "API response error : ", server_name,
                     " : ", body_value['message']
                 )
             end
         else
             ngx_log(ngx_ERR,
-                'API query - bad response : ', server_name ,
+                'API response - bad response : ', server_name ,
                 " : ", status
             )
         end
     end
-
-    local certificate_pem = certificate_pairing()
     if cert ~= nil and pkey ~= nil then
-        ngx_log(ngx_DEBUG, "API query HIT for : ", server_name)
+        ngx_log(ngx_DEBUG, "API response HIT for : ", server_name)
         certificate_pem['cert'] = cert
         certificate_pem['pkey'] = pkey
     else
-        ngx_log(ngx_DEBUG, "API query MISS for : ", server_name)
+        ngx_log(ngx_DEBUG, "API response MISS for : ", server_name)
     end
     return certificate_pem
 end
@@ -342,15 +360,18 @@ local function get_redcon()
     local redcon = redis:new()
     -- Connect to redis.  NOTE: this is a pooled connection
     ngx_log(ngx_DEBUG, "Redis: about to connect to redis: ", redis_server, ":", redis_port)
-    local ok, err = redcon:connect(redis_server, redis_port)
+    local ok, err = pcall(redcon.connect, redcon, redis_server, redis_port)
     if not ok then
         ngx_log(ngx_ERR, "Redis: failed to connect to redis: ", err)
         return nil, err
     end
     -- Change the redis DB to the port
     -- We only have to do this on new connections
-    local times
-    times, err = redcon:get_reused_times()
+    local times, err = redcon:get_reused_times()
+    if err then
+        ngx_log(ngx_ERR, "Redis: failed to detect times: ", err)
+        return nil, err
+    end
     if times <= 0 then
         ngx_log(ngx_DEBUG, "Redis: changing to db:", redis_db_number, ", times:", times)
         redcon:select(redis_db_number)
@@ -507,6 +528,8 @@ local function query_api_upstream(
     ngx_log(ngx_DEBUG, "querying upstream API server at: ", data_uri)
     local httpc = http_new()
     local response, err = httpc:request_uri(data_uri, {method = "GET", })
+    -- response could be nil on a failure, but passing it into the
+    -- following function will give us an empty cert
     local certificate_pem = api_response_to_cert(
         server_name, response, cert_preferences
     )
@@ -531,6 +554,8 @@ local function query_api_autocert(
         method = "POST",
         body = "domain_name=" .. server_name,
     })
+    -- response could be nil on a failure, but passing it into the
+    -- following function will give us an empty cert
     local certificate_pem = api_response_to_cert(
         server_name, response, cert_preferences
     )
@@ -564,7 +589,6 @@ local function set_ssl_certificate(
     -- long after an update/expire
 
     local server_name = ssl_server_name()
-
     ngx_log(ngx_DEBUG, "set_ssl_certificate : ", server_name)
 
     -- Check for SNI request.
@@ -578,7 +602,7 @@ local function set_ssl_certificate(
     ngx_log(ngx_DEBUG, "SNI Lookup for : ", server_name)
 
     -- used for fallbacks
-    local certificate_pem
+    local certificate_pem = certificate_pairing()
 
     -- check worker lru cache first
     -- this stashes an actual cert
@@ -647,19 +671,16 @@ local function set_ssl_certificate(
                 local redcon, err = get_redcon()
                 if redcon == nil then
                     ngx_log(ngx_ERR, "Redis: could not get connection")
-                    -- exit out and just fall back on the default ssl cert
-                    return
+                else
+                    -- actually query redis
+                    if redis_strategy == 1 then
+                        certificate_pem = prime_1__query_redis(redcon, server_name)
+                    elseif redis_strategy == 2 then
+                        certificate_pem = prime_2__query_redis(redcon, server_name)
+                    end
+                    -- return the redcon to the connection pool
+                    redis_keepalive(redcon)
                 end
-
-                -- actually query redis
-                if redis_strategy == 1 then
-                    certificate_pem = prime_1__query_redis(redcon, server_name)
-                elseif redis_strategy == 2 then
-                    certificate_pem = prime_2__query_redis(redcon, server_name)
-                end
-
-                -- return the redcon to the connection pool
-                redis_keepalive(redcon)
             end
 
             -- use a fallback search?
@@ -701,14 +722,12 @@ local function set_ssl_certificate(
                 set_failmarker_lrucache(server_name)
 
                 -- exit out and just fall back on the default ssl cert
-                return
             end
         end
+    end
 
+    if certificate_pairing_data(certificate_pem) then
         -- at this point we have a valid PEM
-        -- if certificate_pairing_data(certificate_pem) then
-        -- end
-
         -- convert from PEM to cdata for WORKER cache (and this server!)
         certificate_cdata = certificate_pairing_pem_to_cdata(
             certificate_pem, certificate_cdata
@@ -718,6 +737,7 @@ local function set_ssl_certificate(
 
     if certificate_pairing_data(certificate_cdata) then
         -- since we have a certs for this server, now we can continue...
+        ngx_log(ngx_DEBUG, "can provide ssl for : ", server_name)
         ssl_clear_certs()
 
         -- scoping
@@ -748,6 +768,8 @@ local function set_ssl_certificate(
         else
             ngx_log(ngx_DEBUG, "set ssl private key : ", server_name)
         end
+    else
+        ngx_log(ngx_DEBUG, "unable to provide ssl for : ", server_name)
     end
 end
 
