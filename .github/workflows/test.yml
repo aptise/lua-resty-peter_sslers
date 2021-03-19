@@ -47,7 +47,7 @@ jobs:
       run: |
         sudo apt-get install perl libperl-dev 
         # our openesty depenedencies
-        opm get ledgetech/lua-resty-http
+        sudo opm get ledgetech/lua-resty-http
 
     - name: Install CPAN
       run: curl -s -L http://xrl.us/cpanm > /bin/cpanm && chmod +x /bin/cpanm
