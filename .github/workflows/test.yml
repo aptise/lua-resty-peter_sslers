@@ -29,8 +29,6 @@ jobs:
     - name: Install OpenResty
       # trying to get the openresty and redis containers to talk to each other was a nightmare
       run: |
-        # remove nginx
-        sudo apt-get remove nginx
         # install OpenResty
         sudo apt-get -y install --no-install-recommends wget gnupg ca-certificates
         wget -O - https://openresty.org/package/pubkey.gpg | sudo apt-key add -
@@ -38,8 +36,10 @@ jobs:
         sudo apt-get update
         sudo apt-get -y install openresty
         sudo systemctl stop openresty
-        which nginx
+        # remove nginx
+        sudo apt-get remove nginx
         which openresty
+        which nginx
 
     - name: Install Redis
       # several tests require Redis
