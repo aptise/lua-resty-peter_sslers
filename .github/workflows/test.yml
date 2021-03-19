@@ -45,7 +45,7 @@ jobs:
 
     - name: Install Deps
       run: |
-        sudo apt-get install perl perl-dev 
+        sudo apt-get install perl libperl-dev 
         # our openesty depenedencies
         opm get ledgetech/lua-resty-http
 
