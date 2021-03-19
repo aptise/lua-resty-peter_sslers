@@ -35,12 +35,14 @@ jobs:
       options: --init
 
     steps:
+    # redis-server and the conf are installed by the package
+    # see https://pkgs.alpinelinux.org/contents?branch=edge&name=redis&arch=x86_64&repo=main
     - name: Install deps
       run: |
         apk add --no-cache curl perl bash wget git perl-dev libarchive-tools redis
         ln -s /usr/bin/bsdtar /usr/bin/tar
         opm get ledgetech/lua-resty-http
-        rc-service redis start
+        /usr/bin/redis-server /etc/redis.conf
 
     - name: Install CPAN
       run: curl -s -L http://xrl.us/cpanm > /bin/cpanm && chmod +x /bin/cpanm
