@@ -90,7 +90,7 @@ jobs:
     - name: Run tests A again for cat
       env:
         TEST_COVERAGE: '1'
-        TEST_NGINX_RESOLVER: '127.0.0.1'
+        TEST_NGINX_RESOLVER: 'resolver local=on ipv6=off'
         REDIS_HOST: redis
         REDIS_PORT: ${{ job.services.redis.ports[6379] }}
       run: |
