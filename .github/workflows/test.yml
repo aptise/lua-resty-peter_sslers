@@ -33,6 +33,8 @@ jobs:
       image: openresty/openresty:${{ matrix.openresty_version }}-alpine-fat
       # --init runs tinit as PID 1 and prevents the 'WARNING: killing the child process' spam from the test suite
       options: --init
+      ports:
+        - 6379:6379
 
     steps:
     - name: Install deps
