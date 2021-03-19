@@ -30,6 +30,7 @@ our $HttpConfig_2 = qq{
     server {
         listen unix:$ENV{TEST_NGINX_HTML_DIR}/nginx.sock ssl;
         server_name example.com;  # fallback domain
+        resolver $ENV{TEST_NGINX_RESOLVER};
         ssl_certificate_by_lua_block  {
             ngx.log(ngx.DEBUG, "server: ssl_certhandler")
 
