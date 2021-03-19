@@ -138,7 +138,7 @@ local function api_response_to_cert(server_name, response, cert_preferences)
                     }
                 end
                 for index, value in next, cert_preferences do
-                    local _bv = body_value[value] 
+                    local _bv = body_value[value]
                     if _bv ~= cjson_null and _bv ~= nil then
                         cert = _bv['fullchain']['pem']
                         pkey = _bv['private_key']['pem']
@@ -146,8 +146,8 @@ local function api_response_to_cert(server_name, response, cert_preferences)
                     end
                 end
                 -- these are for nginx logs
-                _result = body_value["result"]
-                _notes = body_value["notes"]
+                local _result = body_value["result"]
+                local _notes = body_value["notes"]
                 if _result ~= nil then
                     ngx_log(ngx_DEBUG, "API response['result'] = ", _result)
                 end
@@ -724,15 +724,15 @@ local function set_ssl_certificate(
                 -- exit out and just fall back on the default ssl cert
             end
         end
+    end
 
-        if certificate_pairing_data(certificate_pem) then
-            -- at this point we have a valid PEM
-            -- convert from PEM to cdata for WORKER cache (and this server!)
-            certificate_cdata = certificate_pairing_pem_to_cdata(
-                certificate_pem, certificate_cdata
-            )
-            set_cert_lrucache(server_name, certificate_cdata)
-        end
+    if certificate_pairing_data(certificate_pem) then
+        -- at this point we have a valid PEM
+        -- convert from PEM to cdata for WORKER cache (and this server!)
+        certificate_cdata = certificate_pairing_pem_to_cdata(
+            certificate_pem, certificate_cdata
+        )
+        set_cert_lrucache(server_name, certificate_cdata)
     end
 
     if certificate_pairing_data(certificate_cdata) then
