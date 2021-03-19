@@ -341,7 +341,7 @@ local function get_redcon()
     -- Setup Redis connection
     local redcon = redis:new()
     -- Connect to redis.  NOTE: this is a pooled connection
-    ngx_log(ngx_DEBUG, "Redis: about to connect to redis: ", redis_server, redis_port)
+    ngx_log(ngx_DEBUG, "Redis: about to connect to redis: ", redis_server, ":", redis_port)
     local ok, err = redcon:connect(redis_server, redis_port)
     if not ok then
         ngx_log(ngx_ERR, "Redis: failed to connect to redis: ", err)
