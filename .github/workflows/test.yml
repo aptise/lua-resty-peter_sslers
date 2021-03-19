@@ -63,8 +63,6 @@ jobs:
     - name: Run tests
       env:
         TEST_COVERAGE: '1'
-        TEST_NGINX_RESOLVER: localhost
-        REDIS_HOST: localhost
       run: |
          /usr/bin/prove -I../test-nginx/lib -r t/
       continue-on-error: true
@@ -72,8 +70,6 @@ jobs:
     - name: Run tests A again for cat
       env:
         TEST_COVERAGE: '1'
-        TEST_NGINX_RESOLVER: localhost
-        REDIS_HOST: localhost
       run: |
          /usr/bin/prove -I../test-nginx/lib -r t/certificate_serving/03_redis_cache_prime_1.t
       continue-on-error: true
