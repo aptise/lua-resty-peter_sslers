@@ -24,7 +24,7 @@ jobs:
     strategy:
       matrix:
         openresty_version:
-          - 1.17.8.1
+          # - 1.17.8.1
           - 1.19.3.1
 
     runs-on: ubuntu-latest
