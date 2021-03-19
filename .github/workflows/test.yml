@@ -33,29 +33,11 @@ jobs:
       image: openresty/openresty:${{ matrix.openresty_version }}-alpine-fat
       # --init runs tinit as PID 1 and prevents the 'WARNING: killing the child process' spam from the test suite
       options: --init
-      ports:
-        - 53:53
-
-    # Service containers to run with `container-job`
-    services:
-      # Label used to access the service container
-      redis:
-        # Docker Hub image
-        image: redis
-        # Set health checks to wait until redis has started
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          # Maps port 6379 on service container to the host
-          - 6379:6379
 
     steps:
     - name: Install deps
       run: |
-        apk add --no-cache curl perl bash wget git perl-dev libarchive-tools
+        apk add --no-cache curl perl bash wget git perl-dev libarchive-tools redis
         ln -s /usr/bin/bsdtar /usr/bin/tar
         opm get ledgetech/lua-resty-http
 
@@ -83,8 +65,6 @@ jobs:
         TEST_COVERAGE: '1'
         # use redis for the host here because we have specified a container for the job.
         # If we were running the job on the VM this would be localhost
-        REDIS_HOST: redis
-        REDIS_PORT: ${{ job.services.redis.ports[6379] }}
       run: |
          /usr/bin/prove -I../test-nginx/lib -r t/
       continue-on-error: true
@@ -92,9 +72,6 @@ jobs:
     - name: Run tests A again for cat
       env:
         TEST_COVERAGE: '1'
-        TEST_NGINX_RESOLVER: 'localhost'
-        REDIS_HOST: redis
-        REDIS_PORT: ${{ job.services.redis.ports[6379] }}
       run: |
          /usr/bin/prove -I../test-nginx/lib -r t/certificate_serving/03_redis_cache_prime_1.t
       continue-on-error: true
@@ -102,7 +79,6 @@ jobs:
     - name: SHOW ME THE ERROR
       run: |
          cat t/servroot/logs/error.log
-      continue-on-error: true
 
 
     - name: Coverage
