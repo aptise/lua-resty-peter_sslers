@@ -2,7 +2,7 @@ use Test::Nginx::Socket::Lua 'no_plan';
 use Cwd qw(cwd);
 
 my $pwd = cwd();
-$ENV{TEST_NGINX_RESOLVER} = '1.1.1.1';
+$ENV{TEST_NGINX_RESOLVER} ||= '1.1.1.1';
 $ENV{TEST_NGINX_PWD} ||= $pwd;
 $ENV{TEST_COVERAGE} ||= 0;
 $ENV{TEST_NGINX_HTML_DIR} ||= html_dir();
