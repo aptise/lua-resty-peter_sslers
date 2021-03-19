@@ -20,38 +20,29 @@ jobs:
     - run: luarocks install luacheck
     - run: luacheck lib --no-unused
 
-  build:
+  run_tests:
+    strategy:
+      matrix:
+        openresty_version:
+          - 1.17.8.1
+          - 1.19.3.1
+
     runs-on: ubuntu-latest
 
+    container:
+      image: openresty/openresty:${{ matrix.openresty_version }}-alpine-fat
+      # --init runs tinit as PID 1 and prevents the 'WARNING: killing the child process' spam from the test suite
+      options: --init
+
     steps:
-    - uses: actions/checkout@v2
-
-    - name: Install OpenResty
-      # trying to get the openresty and redis containers to talk to each other was a nightmare
+    - name: Install deps
       run: |
-        # install OpenResty
-        sudo apt-get -y install --no-install-recommends wget gnupg ca-certificates
-        wget -O - https://openresty.org/package/pubkey.gpg | sudo apt-key add -
-        echo "deb http://openresty.org/package/ubuntu $(lsb_release -sc) main" | sudo tee /etc/apt/sources.list.d/openresty.list
-        sudo apt-get update
-        sudo apt-get -y install openresty
-        sudo systemctl stop openresty
-        # remove nginx
-        sudo apt-get remove nginx
-        which openresty
-        which nginx
+        apk add --no-cache curl perl bash wget git perl-dev libarchive-tools redis
+        ln -s /usr/bin/bsdtar /usr/bin/tar
+        opm get ledgetech/lua-resty-http
 
-    - name: Install Redis
-      # several tests require Redis
-      # note: if tests hang, it could be because the Redis version has changed
-      run: |
-        sudo apt-get install redis luarocks
-
-    - name: Install Deps
-      run: |
-        sudo apt-get install perl libperl-dev cpanminus
-        # our openesty depenedencies
-        sudo opm get ledgetech/lua-resty-http
+    - name: Install CPAN
+      run: curl -s -L http://xrl.us/cpanm > /bin/cpanm && chmod +x /bin/cpanm
 
     - name: Cache
       uses: actions/cache@v2
@@ -62,10 +53,12 @@ jobs:
         key: ${{ runner.os }}-${{ matrix.openresty_version }}-cache
 
     - name: Install Test::Nginx
-      run: sudo cpanm -q -n Test::Nginx
+      run: cpanm -q -n Test::Nginx
 
     - name: Install Luacov
-      run: sudo luarocks install luacov
+      run: luarocks install luacov
+
+    - uses: actions/checkout@v2
 
     - name: Run tests
       env:
@@ -86,6 +79,7 @@ jobs:
     - name: SHOW ME THE ERROR
       run: |
          cat t/servroot/logs/error.log
+      continue-on-error: true
 
 
     - name: Coverage
