@@ -34,16 +34,31 @@ jobs:
       # --init runs tinit as PID 1 and prevents the 'WARNING: killing the child process' spam from the test suite
       options: --init
 
+    # Service containers to run with `container-job`
+    services:
+      # Label used to access the service container
+      redis:
+        # Docker Hub image
+        image: redis
+        # Set health checks to wait until redis has started
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          # Maps port 6379 on service container to the host
+          - 6379:6379
+
     steps:
     # redis-server and the conf are installed by the package
     # see https://pkgs.alpinelinux.org/contents?branch=edge&name=redis&arch=x86_64&repo=main
     # this container doesn't seem to have the alpine linux start utilities, so daemonize it
     - name: Install deps
       run: |
-        apk add --no-cache curl perl bash wget git perl-dev libarchive-tools redis
+        apk add --no-cache curl perl bash wget git perl-dev libarchive-tools
         ln -s /usr/bin/bsdtar /usr/bin/tar
         opm get ledgetech/lua-resty-http
-        /usr/bin/redis-server /etc/redis.conf &
 
     - name: Install CPAN
       run: curl -s -L http://xrl.us/cpanm > /bin/cpanm && chmod +x /bin/cpanm

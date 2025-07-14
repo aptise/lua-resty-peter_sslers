@@ -1,3 +1,6 @@
+UNRELEASED
+	migrated github test to use redis via image, not installation
+
 0.5.0
 	2021.03.16
 	- added version to headers
