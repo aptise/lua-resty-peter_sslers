@@ -261,3 +261,57 @@ GET /t
 ok
 --- no_error_log
 [error]
+
+=== TEST: malformed_retry
+--- config eval
+qq{
+    location /t {
+        content_by_lua_block {
+            local run = assert(loadfile("$::pwd/t/audit/regressions.lua"))()
+            run("malformed_retry")
+            ngx.say("ok")
+        }
+    }
+}
+--- request
+GET /t
+--- response_body
+ok
+--- no_error_log
+[error]
+
+=== TEST: malformed_retry_autocert
+--- config eval
+qq{
+    location /t {
+        content_by_lua_block {
+            local run = assert(loadfile("$::pwd/t/audit/regressions.lua"))()
+            run("malformed_retry_autocert")
+            ngx.say("ok")
+        }
+    }
+}
+--- request
+GET /t
+--- response_body
+ok
+--- no_error_log
+[error]
+
+=== TEST: absence_cached
+--- config eval
+qq{
+    location /t {
+        content_by_lua_block {
+            local run = assert(loadfile("$::pwd/t/audit/regressions.lua"))()
+            run("absence_cached")
+            ngx.say("ok")
+        }
+    }
+}
+--- request
+GET /t
+--- response_body
+ok
+--- no_error_log
+[error]

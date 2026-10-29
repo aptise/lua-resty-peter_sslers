@@ -111,12 +111,25 @@ local function certificate_pairing()
 end
 
 
+-- API diagnostic fields are untrusted JSON values. Do not pass tables or
+-- JSON-null userdata directly to ngx.log, or serialize their nested contents.
+local function api_log_value(value)
+    if value == cjson_null then return 'null' end
+    local kind = type(value)
+    if kind == 'string' or kind == 'number' then return value end
+    if kind == 'boolean' then return tostring(value) end
+    return '<' .. kind .. '>'
+end
+
+
 local function api_response_to_cert(server_name, response, cert_preferences)
     -- response: api response via `httpc:request_uri(data_uri`
     -- returns: `certificate_pem`
     local cert, pkey
     local certificate_pem = certificate_pairing()
-    certificate_pem.transient = not response or (response.status ~= 200 and response.status ~= 404)
+    -- A 200 is authoritative only after validating its certificate fields.
+    -- Decode/schema errors must not suppress a later successful lookup.
+    certificate_pem.transient = not response or response.status ~= 404
 
     if not response then
         ngx_log(ngx_ERR, 'API response - no response : ', server_name)
@@ -138,8 +151,10 @@ local function api_response_to_cert(server_name, response, cert_preferences)
                         'certificate_signed__latest_single'
                     }
                 end
+                local explicit_absence = #cert_preferences > 0
                 for index, value in ipairs(cert_preferences) do
                     local _bv = body_value[value]
+                    if _bv ~= cjson_null then explicit_absence = false end
                     if type(_bv) == 'table' and type(_bv.fullchain) == 'table'
                         and type(_bv.private_key) == 'table'
                         and type(_bv.fullchain.pem) == 'string'
@@ -149,14 +164,18 @@ local function api_response_to_cert(server_name, response, cert_preferences)
                         break
                     end
                 end
+                if explicit_absence and body_value.result ~= 'error'
+                    and body_value.instructions == nil and body_value.form_errors == nil then
+                    certificate_pem.transient = false
+                end
                 -- these are for nginx logs
                 local _result = body_value["result"]
                 local _notes = body_value["notes"]
                 if _result ~= nil then
-                    ngx_log(ngx_DEBUG, "API response['result'] = ", _result)
+                    ngx_log(ngx_DEBUG, "API response['result'] = ", api_log_value(_result))
                 end
                 if _notes ~= nil then
-                    ngx_log(ngx_DEBUG, "API response['notes'] = ", _notes)
+                    ngx_log(ngx_DEBUG, "API response['notes'] = ", api_log_value(_notes))
                 end
                 if body_value["instructions"] ~= nil then
                     ngx_log(ngx_DEBUG, "API response['instructions'] IS NOT NULL. ERROR")
@@ -174,7 +193,7 @@ local function api_response_to_cert(server_name, response, cert_preferences)
                 -- we expect a 'message' field
                 ngx_log(ngx_DEBUG,
                     "API response error : ", server_name,
-                    " : ", body_value['message']
+                    " : ", api_log_value(body_value['message'])
                 )
             end
         else
@@ -185,6 +204,7 @@ local function api_response_to_cert(server_name, response, cert_preferences)
         end
     end
     if cert ~= nil and pkey ~= nil then
+        certificate_pem.transient = false
         ngx_log(ngx_DEBUG, "API response HIT for : ", server_name)
         certificate_pem['cert'] = cert
         certificate_pem['pkey'] = pkey

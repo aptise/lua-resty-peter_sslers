@@ -113,6 +113,20 @@ local function run(case)
             m.set_ssl_certificate(2, 'http://backend', nil)
             assert(api_calls == 1, 'invalid Redis PEM must fall through to API')
             assert(cache['test.example.com:c'] ~= 'bad', 'invalid PEM must not enter shared cache')
+        elseif case == 'malformed_retry' or case == 'malformed_retry_autocert' then
+            payload = {certificate_signed__latest_multi = {}}
+            local autocert = case == 'malformed_retry_autocert' and 1 or nil
+            m.set_ssl_certificate(nil, 'http://backend', autocert)
+            assert(cache['test.example.com:c'] ~= 'x', 'malformed API result must not become a shared negative entry')
+            payload = {certificate_signed__latest_multi = {fullchain = {pem = 'cert'}, private_key = {pem = 'key'}}}
+            m.set_ssl_certificate(nil, 'http://backend', autocert)
+            assert(api_calls == 2, 'malformed API result must not suppress backend recovery')
+            assert(cache['test.example.com:pair'], 'recovered API certificate must be cached')
+        elseif case == 'absence_cached' then
+            payload = {certificate_signed__latest_multi = null, certificate_signed__latest_single = null}
+            m.set_ssl_certificate(nil, 'http://backend', nil)
+            m.set_ssl_certificate(nil, 'http://backend', nil)
+            assert(api_calls == 1, 'explicit certificate absence must still be cached')
         elseif case == 'outage' then
             outage = true
             m.set_ssl_certificate(nil, 'http://backend', nil)
