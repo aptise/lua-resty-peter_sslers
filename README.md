@@ -1,7 +1,7 @@
 # lua-resty-peter_sslers
 
-Lua support for https://github.com/aptise/peter_sslers Certificate Manager in
-OpenResty
+Lua support for the [peter_sslers Certificate Manager](https://github.com/aptise/peter_sslers)
+in OpenResty.
 
 # Status
 
@@ -16,11 +16,11 @@ Earlier releases require `peter_sslers < 0.4.0`
 
 # Installation
 
-one line...
+Install with OPM:
 
     sudo opm install aptise/lua-resty-peter_sslers
 
-upgrading?
+To upgrade:
 
     sudo opm upgrade aptise/lua-resty-peter_sslers
 
@@ -76,15 +76,17 @@ invoke `ssl_certhandler_set` with `redis_strategy` as `nil`, instead of `1` or
 To use the Peter SSlers Pyramid fallback for querying domains or autocert
 functionality, the following library is used:
 
-* lua-resty-http https://github.com/pintsized/lua-resty-http
+* [lua-resty-http](https://github.com/ledgetech/lua-resty-http)
 
-Hits and misses from the fallback API will be cached in the shared cache dict.
-If you need to remove values, you will need to restart the server OR use one of
-the Nginx/lua examples for cache clearing.  Fallback API requests will notify
-the Pyramid app that the request should have write-through cache behavior.
+Successful API lookups are cached. Missing certificates can produce negative
+cache entries. Transport failures and HTTP statuses other than 200 and 404 do
+not create negative entries, so a subsequent handshake can retry. A 200 response
+with no usable certificate fields is still treated as a miss; this includes
+malformed JSON and incomplete certificate payloads. Invalid PEM is rejected
+before caching and does not create a negative entry.
 
-Debugging statements are sent to the nginx server log, so fallback and autocert
-functions can be debugged by end users.
+Fallback API requests include `openresty=1` to request write-through cache
+behavior from the Pyramid app. Debug messages are written to the Nginx log.
 
 ### Caching Note
 
@@ -92,105 +94,100 @@ In order to maximize performance there are 2 layers of caching WITHIN
 Nginx/OpenResty:
 
 * Certificates are cached in a LRU cache within a given Worker in the native
-  CDATA format for `peter_sslers.lru_cache_duration` seconds (default 60)
+  CDATA format for the configured LRU duration (default 60 seconds)
 * Certificates are cached across all Workers in PEM format for
-  `peter_sslers.cert_cache_duration` seconds (default 600)
+  the configured shared-cache duration (default 600 seconds)
 
-These values can be adjusted.
+Set these durations through `initialize_worker`. The LRU limit counts entries,
+not domains: a certificate and its key occupy two entries, so the default of
+200 holds at most 100 complete pairs.
 
-Why?
+The shared dictionary stores a complete PEM pair in one entry for consistent
+reads across workers. Individual certificate and key entries are also retained
+for status compatibility. Allow space for both representations; `100k` in the
+example is only a starting point. A failed shared-cache write is logged and
+invalidates the cached pair; the current request can still use the retrieved
+certificate in its worker cache.
 
-The Nginx shared dict can easily have values queried
-flushed/expired/overwritten, however it can only store PEM certificates (not
-the cdata pointers), so the certificates need to be repeatedly parsed.
+Shared dictionary contents survive a configuration reload. Worker LRU caches
+belong to their individual workers. Expiration endpoints affect only shared
+memory, so a worker may continue serving its cached certificate until its LRU
+TTL expires. Choose the LRU duration to match the acceptable renewal delay.
 
-The LRU cache can hold the cdata pointers, but implementation details of
-Nginx/OpenResty do not allow easy query & manipulation of the cache.
-Messaging between all the workers for overwriting/expiry would be a large task
-too.
-
-An easy way to handle deployment concerns is to use a timeout on the LRU cache
-that is long-enough to perform well under load, but short-enough to allow for
-changes in the shared-dict to propagate.
-
+On upgrade, old shared-cache certificate entries without the complete-pair
+entry are treated as misses and repopulated from the backends. Existing negative
+markers remain usable until they expire or are cleared.
 
 ## Usage
 
-Make sure your Nginx contains:
+Configure the shared dictionary and initialization hooks in the `http` context:
 
-````
+```nginx
+http {
+    lua_shared_dict cert_cache 100k;
+    lua_code_cache on;
+
+    init_by_lua_block {
+        require "resty.core"
+        require("resty.peter_sslers").initialize()
+    }
+    init_worker_by_lua_block {
+        require "resty.core"
+        local handler = require "resty.peter_sslers"
+        -- Shared-cache TTL, worker LRU TTL, worker LRU entry limit.
+        handler.initialize_worker(600, 60, 200)
+        -- Optional: override all Redis connection defaults.
+        -- handler.redis_update_defaults("127.0.0.1", 6379, 9)
+    }
+
     server {
-		# initialize the cert_cache to a size
-		# it will be accessed via `nginx.shared.cert_cache`
-		lua_shared_dict  cert_cache 100k;
-		lua_code_cache  on;
-		init_by_lua_block {
-			require "resty.core"
-			local ssl_certhandler = require "resty.peter_sslers"
-			ssl_certhandler.initialize()
-		}
-		init_worker_by_lua_block {
-			require "resty.core"
-			local ssl_certhandler = require "resty.peter_sslers"
-			-- cert_cache_duration, lru_cache_duration, lru_maxitems
-			ssl_certhandler.initialize_worker(90, 30, 200)
-		}
-	}
-````
-
-* `initialize` currently does nothing.
-* `initialize_worker` accepts three arguments:
-  * `cert_cache_duration` seconds for PEM cache in ngx.shared.DICT
-  * `lru_cache_duration` seconds for LRU cache of cdata pointer in worker
-  * `lru_maxitems` max number of items for LRU cache of cdata pointer in worker
-
-Then implement the example routes
-
-Due to an implementation detail of lua/luajit, the examples below must be
-implemented in a block/file and can not be "require(/path/to/example)".
-This is because of how the Redis connection is instantiated.
-
-see:
-
-* https://github.com/openresty/lua-resty-redis/issues/33
-* https://github.com/openresty/lua-nginx-module/issues/376
-
-### resty/peter_sslers.lua
-
-Core library.  Exposes several functions.
-
-
-### examples/ssl_certhandler-lookup.lua
-
-This is very simple, it merely specfies a cache, duration, and redis_strategy
-
-Invoked within Nginx...
-
-```
-    server {
-        listen 443 default_server;
-        ...
-        // nginx must have a default configured
+        listen 443 ssl;
+        server_name example.com;
         ssl_certificate /path/to/default/fullchain.pem;
         ssl_certificate_key /path/to/default/privkey.pem;
-		ssl_certificate_by_lua_block  {
-		}
+
+        ssl_certificate_by_lua_block {
+            local handler = require "resty.peter_sslers"
+            local redis_strategy = 1 -- nil disables Redis; 1 and 2 select its format.
+            local fallback_server = "http://127.0.0.1:6543/.well-known/admin"
+            local enable_autocert = nil -- Any non-nil value enables provisioning.
+            handler.set_ssl_certificate(redis_strategy, fallback_server, enable_autocert)
+        }
+    }
+}
 ```
+
+`initialize` currently logs initialization. Call `initialize_worker` in each
+worker before certificate lookups. Its optional arguments default to 600
+seconds, 60 seconds, and 200 entries, respectively.
+
+Pass `nil` for `fallback_server` to disable the API. To disable autocert, pass
+`nil`, not `false`: the current interface treats every non-nil value as enabled.
+The optional fourth argument to `set_ssl_certificate` is an ordered array of
+API certificate fields. Its default is:
+
+```lua
+{"certificate_signed__latest_multi", "certificate_signed__latest_single"}
+```
+
+The core module is `lib/resty/peter_sslers.lua`. Use the handler examples
+inside the corresponding Nginx Lua phase, such as `ssl_certificate_by_lua_block`
+or `content_by_lua_block`, or with the matching `*_by_lua_file` directive. The
+examples execute request-specific work; load the library with `require` and
+invoke its functions on each request rather than requiring an example script
+as a cached module.
 
 ### examples/ssl_certhandler-expire.lua
 
-The Nginx shared memory cache persists across configuration reloads.
-Servers must be fully restarted to clear memory.
+The Nginx shared memory cache persists across configuration reloads. These
+endpoints clear cached values without requiring a full server restart.
 
-The workaround?  API endpoints to "flush" the cache or expire certain
-keys(domains).
-
-A simple example is provided with `examples/ssl_certhandler-expire`,
+A simple example is provided with `examples/ssl_certhandler-expire.lua`,
 which can be invoked within Nginx as-is rather easily:
 
 ````
     server {
-        listen 443 default_server;
+        listen 443 ssl default_server;
         ...
         location  /.peter_sslers  {
             auth_basic  "peter_sslers-nginx";
@@ -209,31 +206,31 @@ which can be invoked within Nginx as-is rather easily:
 	}
 ````
 
-This expire tool creates the following routes:
+The expiration handler uses the current Nginx `$location` value as its route
+prefix. With the location shown above, it provides these routes:
 
-* `/peter_sslers/nginx/shared_cache/expire/all`
-** Flushes the entire Nginx certificate cache
-* `/peter_sslers/nginx/shared_cache/expire/domain/{DOMAIN}`
-** Flushes the domain's pkey & chain entires in the certificate cache
+* `/.peter_sslers/nginx/shared_cache/expire/all` flushes the shared dictionary.
+* `/.peter_sslers/nginx/shared_cache/expire/domain/{DOMAIN}` removes the complete
+  pair and individual certificate/key entries for that domain.
 
-On success, these routes return JSON in a HTTP-200-OK document.
-
-* {"result": "success", "expired": "all"}
-* {"result": "success", "expired": "domain", "domain": "{DOMAIN}"}
-* {"result": "error", "expired": "None", "reason": "Unknown URI"}
-
-On error, these routes should generate a bad status code.
+Use the lowercase domain without a trailing dot for per-domain expiration.
+Avoid query strings: routing currently matches the full request URI.
+Successful operations return HTTP 200 with a JSON `result` of `success`.
+Unknown routes return HTTP 404. Neither operation clears worker LRU caches or
+Redis. The per-domain route also leaves any in-progress autocert lock intact;
+flushing the entire dictionary removes locks along with cached certificates.
 
 The Pyramid component can query these endpoints automatically for you.
 
 
 ### examples/ssl_certhandler-status.lua
 
-The status route shows some info about the system
+The status route lists up to 1024 shared-dictionary keys and reports cache
+configuration. It does not inspect worker LRU caches or validate stored PEM.
 
 ````
     server {
-        listen 443 default_server;
+        listen 443 ssl default_server;
         ...
         location  /.peter_sslers/nginx  {
             auth_basic  "peter_sslers-nginx";
@@ -254,7 +251,7 @@ The status route shows some info about the system
 	
 ### examples/ssl_certhandler-lookup.lua
 
-This the core work:
+This example enables autocert provisioning:
 
 ````
         ssl_certificate_by_lua_block  {
@@ -265,65 +262,57 @@ This the core work:
             local ssl_certhandler_set = ssl_certhandler.set_ssl_certificate
 
             local redis_strategy = 1
-            local fallback_server = 'http://0.0.0.0:6543/.well-known/admin'
+            local fallback_server = 'http://127.0.0.1:6543/.well-known/admin'
             local enable_autocert = 1
             ssl_certhandler_set(redis_strategy, fallback_server, enable_autocert)
         }
 ````
 
 
-### fully configured example
+### Fully configured example
 
-a fully configured example is available in the main peter_sslers repo:
+A fully configured example is available in the main peter_sslers repo:
 
    * https://github.com/aptise/peter_sslers/blob/master/tools/nginx_conf/enabled.conf
 
-### Details
+### Lookup and failure behavior
 
-This approach makes aggressive use of caching in the Nginx workers (via worker
-lru and a shared dict) and Redis; caching both hits and misses.
+For each handshake, the handler checks the worker LRU, the shared dictionary,
+Redis if enabled, and finally the API if configured. Certificate and key PEM
+must parse before a backend result is cached. Invalid Redis PEM allows the API
+fallback to run. Redis connection and database-selection errors reject that
+connection.
 
-The Nginx worker dicts are shared across reloads (`kill -HUP {PID}`); so if a
-bad value gets in there you must restart or wait for the timeout.
+SNI names are lowercased and one final dot is removed. Names must use ASCII DNS
+labels of at most 63 characters and total at most 253 characters after
+normalization. Letters, digits, and internal hyphens are accepted. Use IDNA
+ASCII form for internationalized names. Missing or rejected SNI names leave the
+configured default certificate in place without querying a backend.
 
-The logic in pseudocode:
+Without autocert, the API receives a GET at
+`{fallback_server}/domain/{domain}/config.json?openresty=1`. With autocert, it
+receives a form POST containing `domain_name` at
+`{fallback_server}/api/domain/autocert.json?openresty=1`.
 
-````
-	cert_cdata = lru_cache.get(domain)  # check worker cache
-	if hit(cert_cdata):
-		if invalid(cert_cdata):
-			return
-	else:
-		cert_pem =	cert_cache.get(domain)  # check shared cache
-		if hit(cert_pem):
-			if invalid(cert_pem):
-				lru_cache.set(domain, invalid)
-				return
-		else:
-			cert_pem = redis.get(domain)
-			if hit(cert_pem):
-				if invalid(cert_pem):
-					lru_cache.set(domain, invalid)
-					cert_cache.set(domain, invalid)
-					return
-			else:
-				if autocert_enabled:
-					cert_pem = 	upstream_https.get(domain)  # autocert
-				else:
-					cert_pem = 	upstream_https.get(domain)  # query
-				if hit(cert_pem):
-					if invalid(cert_pem):
-						lru_cache.set(domain, invalid)
-						cert_cache.set(domain, invalid)
-						return
-			if valid(cert_pem)
-				lru_cache.set(domain, cert_cdata)
-				cert_cache.set(domain, cert_pem)
-				cert_cdata = parse(cert_pem)
-	if valid(cert_cdata):
-		set_ssl_certificate(cert_cdata)
-````
+Autocert uses an atomic shared-dictionary lock plus a pending marker. A request
+that cannot acquire the lock returns with the default certificate rather than
+waiting for provisioning. The marker and lock are cleared after the API call,
+including when it raises an exception. The lock lease uses the shared-cache
+TTL (600 seconds by default); it is not a permanent exclusion mechanism if a
+request outlasts its lease or the dictionary is flushed or entries are evicted.
 
+A negative cache entry leaves the default certificate in place and suppresses
+backend lookups until it expires or is cleared. A worker can retain a negative
+entry for its LRU TTL after the shared marker expires. Redis connection errors,
+API transport failures, non-200/non-404 API responses, and invalid backend PEM
+do not create a new negative entry. There is no stale-certificate
+fallback after cache expiration and no retry backoff for transport failures.
+
+PEM parsing checks do not establish certificate hostname coverage, expiration,
+trust, or that the private key matches the certificate. Backends must supply
+correct certificate material. A failure while installing a certificate or key
+is logged; after the default certificate has been cleared, the handshake can
+fail rather than fall back to it.
 
 ### Integration/Debugging HowTo
 
@@ -356,59 +345,90 @@ Check the status:
 
 expire
 
-	curl -k https://peter:sslers@127.0.0.1/.peter_sslers/nginx/shared_cache/expire
+	curl -k https://peter:sslers@127.0.0.1/.peter_sslers/nginx/shared_cache/expire/domain/example.com
 	
 	
 ### Tests
 
-#### Luacheck
+Run commands from the repository root. Install OpenResty, `lua-resty-http`,
+Redis, and the Perl test harness:
 
-The tests in `test.yml` disable unused variables:
+```sh
+cpan App::cpanminus
+cpanm Test::Nginx
+opm get ledgetech/lua-resty-http
+```
 
-    - run: luacheck lib --no-unused
+The Redis integration tests write fixture keys in database **9**, including
+`d1:test.example.com`, `d2:test.example.com`, `c:1`, `p:100`, and `i:1000`.
+Use a dedicated test Redis instance. Tests default to `127.0.0.1:6379`; set
+`REDIS_HOST` and `REDIS_PORT` to select another instance. The database number
+is fixed by the fixtures.
 
-To do local tests
+With OpenResty's `nginx` on `PATH`, run:
 
-	luarocks install luacheck
-	luacheck lib
+```sh
+make test
+```
 
-#### Test::Nginx
+For an installation elsewhere:
 
-Upgrade CPAN
+```sh
+make test OPENRESTY_PREFIX=/path/to/openresty
+```
 
-	cpan
-	upgrade
+Alternatively, select the executable directly:
 
-Install cpanm
+```sh
+TEST_NGINX_BINARY=/path/to/openresty/nginx/sbin/nginx prove -r t
+```
 
-	cpan App::cpanminus
+The HTTP test server and API fixtures default to unprivileged port **1984**.
+TLS handshake tests use Unix sockets. Normal runs need no port configuration;
+if 1984 is occupied, use one override for the listener and API fixtures:
 
-Install the test harness
+```sh
+TEST_NGINX_SERVER_PORT=19840 make test
+```
 
-	cpanm -q -n Test::Nginx
+`TEST_NGINX_PORT` is also supported as a fallback. Normally leave
+`TEST_NGINX_CLIENT_PORT` unset so the harness client follows the server port.
+Different port values alone do not guarantee that parallel runs are isolated:
+they may still share Redis fixture keys and runtime paths.
 
+For checkout paths containing spaces, the test helper automatically places
+generated Nginx runtime files in a temporary directory. Certificate fixtures
+are referenced using quoted absolute paths. An explicit `TEST_NGINX_SERVROOT`
+overrides this choice; choose a short path without spaces. Temporary runtime
+directories are retained for log inspection.
 
-Where is your openresty? Make sure it's in the path
+Run just the deterministic audit regressions, without a Redis server:
 
-	export PATH=/usr/local/openresty/nginx/sbin:$PATH
-	export PATH=/usr/local/bin/:$PATH
+```sh
+prove t/audit/01_regressions.t
+```
 
-Run the test(s)
+Those cases run under OpenResty with injected backend and cache behavior. The
+certificate-serving tests exercise actual TLS handshakes, Redis, and local API
+fixtures. See [the test design notes](t/certificate_serving/README.md).
 
-	/usr/bin/prove -I../test-nginx/lib -r t/
+For linting and coverage:
 
+```sh
+luarocks install luacheck
+luacheck lib --no-unused
+make coverage
+```
 
-### Known problems
-
-none!
-
+Coverage requires `luacov` to be installed and available to OpenResty. The CI
+workflow also disables unused-variable warnings for linting.
 
 # Versioning
 
-This project uses Major.Minor.Path semantic versioning.
+This project uses Major.Minor.Patch semantic versioning.
 
 Major.Minor version releases are pegged to the same Major.Minor releases as
-`lua-resty-peter__slers`.
+`peter_sslers`.
 
 For example:
 

@@ -1,3 +1,18 @@
+Unreleased
+	- fixed per-domain shared-cache expiration
+	- validate backend PEM before caching; allow API fallback after invalid Redis PEM
+	- avoid negative caching for transport errors and non-200/non-404 API responses
+	- validate certificate response fields and preserve certificate preference order
+	- preserve Redis connection errors and reject failed database selection
+	- read complete certificate/key pairs atomically from shared memory
+	- validate and normalize SNI names before cache and API lookups
+	- acquire autocert locks atomically and clean up after API exceptions
+	- declare form content type for autocert POST requests
+	- added deterministic audit regression coverage
+	- test API fixtures follow the runner port, retaining the default of 1984
+	- support test checkouts with spaces and configurable OpenResty install prefixes
+	- refreshed setup, cache behavior, limitations, and test documentation
+
 0.5.0
 	2021.03.16
 	- added version to headers
