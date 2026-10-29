@@ -68,8 +68,9 @@ peter_sslers application. These cases supplement the existing TLS-handshake
 integration tests; they do not replace them.
 
 CI runs the complete fixture-backed suite separately for Valkey and Redis on a
-modern OpenResty image. The older OpenResty matrix still exercises the ordinary
-suite without requiring mTLS support.
+modern OpenResty image. The ordinary-suite matrix covers OpenResty 1.29.2.4 and 1.31.1.1; the secure
+backend job follows the 1.31 image series. CI uses LuaRocks 3.13.0 explicitly
+to avoid the LuaJIT manifest constant-limit issue (LuaRocks #1797).
 
 ## Resolver and parallel-fixture audits
 

@@ -44,6 +44,8 @@
 	- set package version to 1.0.0 and audit README, API reference, and inline function documentation
 	- clarify semantic versioning, paired Python compatibility, mlcache capacity/invalidation, and upgrade behavior
 	- renamed `certificate_pairing_validate` to `certificate_pairing_is_candidate`
+	- refresh CI Lua/LuaRocks, checkout/cache actions, and OpenResty images; pin LuaRocks 3.13.0 to avoid LuaJIT manifest limits
+	- replace the HTTP CPAN bootstrap and invalidate obsolete dependency caches
 
 0.5.0
 	2021.03.16

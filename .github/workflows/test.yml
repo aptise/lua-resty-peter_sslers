@@ -8,15 +8,20 @@ on:
     paths-ignore: # Skip if only docs are updated
         - '*.md'
 
+permissions:
+  contents: read
+
 jobs:
   luacheck:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v2
-    - uses: leafo/gh-actions-lua@v8
+    - uses: actions/checkout@v6
+    - uses: leafo/gh-actions-lua@v13
       with:
         luaVersion: "luajit-openresty"
-    - uses: leafo/gh-actions-luarocks@v4
+    - uses: leafo/gh-actions-luarocks@v6
+      with:
+        luaRocksVersion: "3.13.0"
     - run: luarocks install luacheck
     - run: luacheck lib --no-unused
 
@@ -24,8 +29,8 @@ jobs:
     strategy:
       matrix:
         openresty_version:
-          - 1.17.8.1
-          - 1.19.3.1
+          - 1.29.2.4
+          - 1.31.1.1
 
     runs-on: ubuntu-latest
 
@@ -46,23 +51,29 @@ jobs:
         /usr/bin/redis-server /etc/redis.conf &
 
     - name: Install CPAN
-      run: curl -s -L http://xrl.us/cpanm > /bin/cpanm && chmod +x /bin/cpanm
+      run: PERL_MM_USE_DEFAULT=1 cpan App::cpanminus
 
     - name: Cache
-      uses: actions/cache@v2
+      uses: actions/cache@v5
       with:
         path: |
           ~/.cpan
           ~/.cache
-        key: ${{ runner.os }}-${{ matrix.openresty_version }}-cache
+        key: ${{ runner.os }}-${{ matrix.openresty_version }}-luarocks-3.13.0-cache
 
     - name: Install Test::Nginx
       run: cpanm -q -n Test::Nginx
 
     - name: Install Luacov
-      run: luarocks install luacov
+      # Bootstrap directly: old LuaRocks cannot parse large manifests under LuaJIT.
+      # https://github.com/luarocks/luarocks/issues/1797
+      run: |
+        curl --fail --location --retry 3 -o /tmp/luarocks.src.rock https://luarocks.org/luarocks-3.13.0-1.src.rock
+        luarocks install /tmp/luarocks.src.rock
+        luarocks --version
+        luarocks install luacov
 
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v6
 
     - name: Run tests
       env:
@@ -85,7 +96,7 @@ jobs:
       image: openresty/openresty:1.31-alpine-fat
       options: --init
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install secure test dependencies
         run: |
           apk add --no-cache python3 openssl perl perl-dev make ${{ matrix.backend }}
