@@ -12,6 +12,20 @@ Unreleased
 	- test API fixtures follow the runner port, retaining the default of 1984
 	- support test checkouts with spaces and configurable OpenResty install prefixes
 	- refreshed setup, cache behavior, limitations, and test documentation
+	- malformed HTTP-200 payloads permit retries; explicit absence remains cacheable
+	- safely log unexpected API diagnostic types
+	- discard obsolete autocert responses and hold ownership through cache publication
+	- added real two-worker shared-dictionary regressions for autocert lease changes
+	- recover from Redis command errors, wrong-type keys, and incomplete records
+	- close failed datastore connections and avoid negative caching of command errors
+	- support Valkey as the preferred datastore backend, retaining Redis compatibility
+	- added valkey_update_defaults alias and optional datastore connection settings
+	- support datastore password/ACL authentication, verified TLS, client certificates, and timeouts
+	- added api_update_defaults for Basic/Bearer auth, HTTPS settings, client certificates, and timeouts
+	- isolate pooled connections by backend configuration, identity, and datastore database
+	- reject unsupported TLS/mTLS client configurations explicitly
+	- added isolated Valkey/Redis and Python HTTP/TLS fixtures, test-secure target, and CI jobs
+	- documented secure connectivity options and fixture-backed verification
 
 0.5.0
 	2021.03.16

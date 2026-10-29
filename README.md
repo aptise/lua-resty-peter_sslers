@@ -5,7 +5,11 @@ in OpenResty.
 
 # Status
 
-This package has been used in production since 2016
+This package has been used in production since 2016.
+
+This README describes the current checkout, including unreleased features in
+[CHANGES.txt](CHANGES.txt). Released OPM packages may not yet include the new
+secure-connectivity configuration APIs.
 
 The `0.5.0` release requires `peter_sslers >= 0.5.0`
 
@@ -53,23 +57,32 @@ unit tests
 The `-lookup.lua`, `-expire.lua`,  `-status.lua` scripts can be copied into an
 nginx/openresty server block. For reference, look at the test suite.
 
-The library defaults to use the following information for redis:
+Valkey is the preferred datastore backend; Redis remains supported. Both use
+`lua-resty-redis` and the same prime-1/prime-2 certificate formats. Existing
+Redis configuration calls continue to work.
 
-	local redis_server = '127.0.0.1'
-	local redis_port = '6379'
-	local redis_db_number = 9
+The default datastore is `127.0.0.1:6379`, database `9`, without TLS or
+authentication. Override it in worker initialization:
 
-This can be altered using "redis_update_defaults"
+```lua
+handler.valkey_update_defaults(host, port, database, options)
+-- Equivalent backward-compatible name:
+handler.redis_update_defaults(host, port, database, options)
+```
 
-	redis_update_defaults(_redis_server, _redis_port, _redis_db_number)
+The optional fourth argument configures password/ACL authentication, TLS,
+client certificates, and timeouts. Configure the Python backend separately with
+`handler.api_update_defaults(options)` for Basic/Bearer authentication, HTTPS
+verification, client certificates, and timeouts. Use an `https://` fallback URL
+to enable API TLS.
 
-Redis is NOT required, but recommended.  Instead you can failover to directly
-query a peter_sslers pyramid instance.
+See [Valkey, Redis, and secure API connections](docs/connectivity.md) for the
+options reference, runtime requirements, trusted-CA setup, and a complete
+configuration example.
 
-### To Disable Redis
-
-invoke `ssl_certhandler_set` with `redis_strategy` as `nil`, instead of `1` or
-`2`. Simple!
+The datastore is optional. Set `redis_strategy` to `nil` to query the API
+directly, or to `1` or `2` to select a datastore certificate format. The argument
+name applies to both Valkey and Redis.
 
 ### Pyramid Fallback
 
@@ -80,10 +93,13 @@ functionality, the following library is used:
 
 Successful API lookups are cached. Missing certificates can produce negative
 cache entries. Transport failures and HTTP statuses other than 200 and 404 do
-not create negative entries, so a subsequent handshake can retry. A 200 response
-with no usable certificate fields is still treated as a miss; this includes
-malformed JSON and incomplete certificate payloads. Invalid PEM is rejected
-before caching and does not create a negative entry.
+not create negative entries, so a subsequent handshake can retry. Malformed
+JSON, incomplete certificate fields, and API error payloads also permit retries.
+An HTTP-200 response explicitly setting every requested certificate preference
+to JSON null can be negatively cached when it has no error, instructions, or
+form-errors fields. HTTP 404 remains a cacheable absence. Invalid PEM is rejected
+before caching and does not create a negative entry. Unexpected diagnostic field
+types are logged safely without aborting lookup.
 
 Fallback API requests include `openresty=1` to request write-through cache
 behavior from the Pyramid app. Debug messages are written to the Nginx log.
@@ -136,8 +152,8 @@ http {
         local handler = require "resty.peter_sslers"
         -- Shared-cache TTL, worker LRU TTL, worker LRU entry limit.
         handler.initialize_worker(600, 60, 200)
-        -- Optional: override all Redis connection defaults.
-        -- handler.redis_update_defaults("127.0.0.1", 6379, 9)
+        -- Optional: select Valkey or Redis and configure its connection.
+        -- handler.valkey_update_defaults("127.0.0.1", 6379, 9, {})
     }
 
     server {
@@ -278,10 +294,13 @@ A fully configured example is available in the main peter_sslers repo:
 ### Lookup and failure behavior
 
 For each handshake, the handler checks the worker LRU, the shared dictionary,
-Redis if enabled, and finally the API if configured. Certificate and key PEM
-must parse before a backend result is cached. Invalid Redis PEM allows the API
-fallback to run. Redis connection and database-selection errors reject that
-connection.
+Valkey/Redis if enabled, and finally the API if configured. Certificate and key
+PEM must parse before a backend result is cached. Invalid datastore PEM allows
+the API fallback to run. Connection, authentication, database-selection, and
+command errors reject the affected datastore connection. Command errors,
+wrong-type keys, partial records, and missing referenced certificate parts can
+fall through to the API and remain retryable; only an all-null domain lookup is
+a clean datastore miss.
 
 SNI names are lowercased and one final dot is removed. Names must use ASCII DNS
 labels of at most 63 characters and total at most 253 characters after
@@ -296,16 +315,20 @@ receives a form POST containing `domain_name` at
 
 Autocert uses an atomic shared-dictionary lock plus a pending marker. A request
 that cannot acquire the lock returns with the default certificate rather than
-waiting for provisioning. The marker and lock are cleared after the API call,
-including when it raises an exception. The lock lease uses the shared-cache
-TTL (600 seconds by default); it is not a permanent exclusion mechanism if a
-request outlasts its lease or the dictionary is flushed or entries are evicted.
+waiting for provisioning. Each attempt has an ownership token, and the lock is
+held through cache publication. After the API call and PEM parsing, a request
+that detects a lost lease discards its response rather than overwriting a newer
+certificate or releasing another attempt's lock. Exceptions release a lock only
+while the request still owns it. The lock lease uses the shared-cache TTL
+(600 seconds by default); expiry, dictionary flushes, and eviction can permit a
+replacement attempt while the original API request is still running.
 
 A negative cache entry leaves the default certificate in place and suppresses
 backend lookups until it expires or is cleared. A worker can retain a negative
-entry for its LRU TTL after the shared marker expires. Redis connection errors,
-API transport failures, non-200/non-404 API responses, and invalid backend PEM
-do not create a new negative entry. There is no stale-certificate
+entry for its LRU TTL after the shared marker expires. Datastore connection and
+command errors, API transport failures, malformed API responses,
+non-200/non-404 API responses, and invalid backend PEM do not create a new
+negative entry. There is no stale-certificate
 fallback after cache expiration and no retry backoff for transport failures.
 
 PEM parsing checks do not establish certificate hostname coverage, expiration,
@@ -351,7 +374,7 @@ expire
 ### Tests
 
 Run commands from the repository root. Install OpenResty, `lua-resty-http`,
-Redis, and the Perl test harness:
+Valkey (preferred) or Redis, and the Perl test harness:
 
 ```sh
 cpan App::cpanminus
@@ -359,9 +382,9 @@ cpanm Test::Nginx
 opm get ledgetech/lua-resty-http
 ```
 
-The Redis integration tests write fixture keys in database **9**, including
+The datastore integration tests write fixture keys in database **9**, including
 `d1:test.example.com`, `d2:test.example.com`, `c:1`, `p:100`, and `i:1000`.
-Use a dedicated test Redis instance. Tests default to `127.0.0.1:6379`; set
+Use a dedicated test Valkey or Redis instance. Tests default to `127.0.0.1:6379`; set
 `REDIS_HOST` and `REDIS_PORT` to select another instance. The database number
 is fixed by the fixtures.
 
@@ -411,6 +434,19 @@ prove t/audit/01_regressions.t
 Those cases run under OpenResty with injected backend and cache behavior. The
 certificate-serving tests exercise actual TLS handshakes, Redis, and local API
 fixtures. See [the test design notes](t/certificate_serving/README.md).
+
+For isolated password, TLS, and client-certificate fixtures, install Python 3,
+`openssl`, and a TLS-enabled `valkey-server`, then run:
+
+```sh
+make test-secure
+make test-secure BACKEND=redis
+```
+
+Valkey is the default. The runner starts temporary datastore and Python API
+servers and runs the entire suite against them. Ordinary `make test` skips the
+fixture-dependent security cases. See [secure backend tests](t/security/README.md)
+for prerequisites, focused runs, and CI coverage.
 
 For linting and coverage:
 

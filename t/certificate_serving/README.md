@@ -45,8 +45,8 @@ are retained so failed runs can be inspected. Certificate paths are absolute
 and quoted. An explicit `TEST_NGINX_SERVROOT` takes precedence and should be a
 short path without whitespace.
 
-The prime-1 and prime-2 integration cases require Redis and write fixture data
-in database 9. Use a dedicated test instance; `REDIS_HOST` and `REDIS_PORT`
+The prime-1, prime-2, and command-error integration cases require Valkey or Redis
+and write fixture data in database 9. Use a dedicated test instance; `REDIS_HOST` and `REDIS_PORT`
 override the default `127.0.0.1:6379`. Using different HTTP ports does not isolate
 Redis fixtures between concurrent runs.
 
@@ -54,6 +54,18 @@ The cases in `t/audit/01_regressions.t` use injected dependencies from
 `t/audit/regressions.lua` to test backend errors and cache behavior without a
 Redis server. They still require OpenResty and Test::Nginx. Mocked parsing does
 not replace the real TLS handshake coverage in this directory.
+
+`t/audit/02_api_responses.t` uses the real JSON decoder and Nginx logger with an
+injected HTTP transport. `03_autocert_workers.t` uses two distinct worker
+processes, real shared dictionaries, real PEM parsing, and worker LRUs to check
+pending requests and stale autocert leases; HTTP transport and TLS-phase setters
+are injected. `04_redis_errors.t` injects datastore failures without a live
+service. `08_redis_command_errors.t` in this directory checks actual wrong-type
+responses with per-worker fixture keys and cleanup.
+
+For live password, TLS, and mTLS tests against both datastores and Python API
+fixtures, use `make test-secure` (Valkey) or `make test-secure BACKEND=redis`.
+See [secure backend tests](../security/README.md) for setup and coverage.
 
 # Test Design
 
