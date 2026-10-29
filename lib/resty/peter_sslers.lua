@@ -159,6 +159,8 @@ local function api_response_to_cert(server_name, response, cert_preferences)
     -- A 200 is authoritative only after validating its certificate fields.
     -- Decode/schema errors must not suppress a later successful lookup.
     certificate_pem.transient = not response or response.status ~= 404
+    certificate_pem.backend_failure = not response or response.status == 401 or response.status == 403
+        or response.status == 429 or (type(response.status) == 'number' and response.status >= 500)
 
     if not response then
         ngx_log(ngx_ERR, 'API response - no response : ', server_name)
@@ -363,6 +365,47 @@ local function set_cert_sharedcache(server_name, certificate_pem)
 end
 
 
+-- Short backend-wide cooldowns are independent of domain certificate/absence
+-- entries. Stable opaque identities share cooldowns across workers without
+-- putting credentials or client-key PEM into shared-dictionary keys.
+local function retry_identity(options)
+    local parts = {}
+    for _, name in ipairs({'username', 'password', 'authorization', 'ssl', 'ssl_verify',
+        'server_name', 'client_cert', 'client_key', 'timeout', 'retry_backoff'}) do
+        local value = options[name]
+        if name == 'ssl' then value = value == true end
+        if name == 'ssl_verify' and value == nil then value = true end
+        if name == 'retry_backoff' and value == nil then value = 1 end
+        local encoded = type(value) .. ':' .. tostring(value)
+        parts[#parts + 1] = #encoded .. ':' .. encoded
+    end
+    return ngx.md5(table.concat(parts))
+end
+
+
+local function retry_state(kind, endpoint, options)
+    local delay = options.retry_backoff
+    if delay == nil then delay = 1 end
+    if delay == 0 then return nil, 0 end
+    if not options.retry_identity then options.retry_identity = retry_identity(options) end
+    return 'peter_sslers:retry:' .. kind .. ':' .. ngx.md5(endpoint .. '\0' .. options.retry_identity), delay
+end
+
+
+local function retry_failed(key, delay)
+    if not key then return end
+    -- safe_add neither evicts usable certificates nor extends an existing
+    -- cooldown when other requests from the same failing wave finish later.
+    local ok, err = cert_cache:safe_add(key, true, delay)
+    if not ok and err ~= 'exists' then ngx_log(ngx.WARN or ngx.ERR, 'could not store backend cooldown: ', err) end
+end
+
+
+local function retry_succeeded(key)
+    if key then cert_cache:delete(key) end
+end
+
+
 -- Configuration is copied and certificates are parsed once per configuration,
 -- never during individual handshakes. Passwords never appear in pool names.
 local function connection_options(options, is_redis)
@@ -370,7 +413,7 @@ local function connection_options(options, is_redis)
     local result = {}
     local allowed = {username = true, password = true, ssl = is_redis,
         ssl_verify = true, server_name = true, client_cert = true,
-        client_key = true, timeout = true, authorization = not is_redis}
+        client_key = true, timeout = true, retry_backoff = true, authorization = not is_redis}
     for key, value in pairs(options) do
         assert(allowed[key], 'unknown connection option: ' .. tostring(key))
         result[key] = value
@@ -383,6 +426,10 @@ local function connection_options(options, is_redis)
     if result.ssl_verify == nil then result.ssl_verify = true end
     assert(result.timeout == nil or (type(result.timeout) == 'number' and result.timeout > 0),
         'timeout must be a positive number of milliseconds')
+    if result.retry_backoff == nil then result.retry_backoff = 1 end
+    assert(type(result.retry_backoff) == 'number' and result.retry_backoff >= 0 and result.retry_backoff <= 60,
+        'retry_backoff must be between 0 and 60 seconds')
+    if result.retry_backoff > 0 then result.retry_identity = retry_identity(result) end
     assert(not result.username or result.password ~= nil, 'username requires password')
     assert(not result.authorization or (not result.username and not result.password),
         'authorization and username/password are mutually exclusive')
@@ -521,7 +568,7 @@ local function redis_domain_data(redcon, key_domain, ...)
     if err or type(data) ~= 'table' then
         err = err or 'invalid HMGET response'
         ngx_log(ngx_ERR, 'Redis: failed to query domain(', key_domain, ') Err: ', err)
-        return nil, err
+        return nil, err, data == nil
     end
     local count = select('#', ...)
     local all_missing = true
@@ -549,7 +596,7 @@ local function redis_certificate_parts(redcon, keys)
     if err or type(values) ~= 'table' then
         err = err or 'invalid certificate pipeline response'
         ngx_log(ngx_ERR, 'Redis: certificate pipeline failed: ', err)
-        return nil, err
+        return nil, err, values == nil
     end
     for index = 1, 3 do
         local value = values[index]
@@ -570,14 +617,14 @@ end
 local function prime_1__query_redis(redcon, _server_name)
     -- Return a pair, a clean miss (nil), or a retryable failure (nil, err).
     ngx_log(ngx_DEBUG, "Redis: prime_1__query_redis : ", _server_name)
-    local domain_data, err = redis_domain_data(redcon, 'd1:' .. _server_name, 'c', 'p', 'i')
-    if not domain_data then return nil, err end
+    local domain_data, err, backend_failure = redis_domain_data(redcon, 'd1:' .. _server_name, 'c', 'p', 'i')
+    if not domain_data then return nil, err, backend_failure end
 
     local parts
-    parts, err = redis_certificate_parts(redcon, {
+    parts, err, backend_failure = redis_certificate_parts(redcon, {
         'p:' .. domain_data[2], 'c:' .. domain_data[1], 'i:' .. domain_data[3],
     })
-    if not parts then return nil, err end
+    if not parts then return nil, err, backend_failure end
 
     local certificate_pem = certificate_pairing()
     certificate_pem.cert = parts[2] .. "\n" .. parts[3]
@@ -589,8 +636,8 @@ end
 local function prime_2__query_redis(redcon, _server_name)
     -- Return a pair, a clean miss (nil), or a retryable failure (nil, err).
     ngx_log(ngx_DEBUG, "Redis: prime_2__query_redis : ", _server_name)
-    local domain_data, err = redis_domain_data(redcon, 'd2:' .. _server_name, 'p', 'f')
-    if not domain_data then return nil, err end
+    local domain_data, err, backend_failure = redis_domain_data(redcon, 'd2:' .. _server_name, 'p', 'f')
+    if not domain_data then return nil, err, backend_failure end
 
     local certificate_pem = certificate_pairing()
     certificate_pem.cert = domain_data[2]
@@ -711,119 +758,112 @@ end
 -- START MAIN LOGIC
 
 
+local function parse_backend_candidate(pem)
+    if not certificate_pairing_data(pem) then return nil end
+    if not certificate_pairing_validate(pem) then return nil, 'invalid backend certificate marker' end
+    local parsed = certificate_pairing_pem_to_cdata(pem, {})
+    if not certificate_pairing_data(parsed) then return nil, 'invalid backend PEM' end
+    return parsed
+end
+
+
 local function fetch_certificate(
     context, server_name, redis_strategy, fallback_server, enable_autocert, cert_preferences
 )
-    local certificate_pem = certificate_pairing()
-    local transient, parsed = false, nil
-    -- our upstream providers will return
-    -- a `certificate_pairing()` or `nil` value
-    -- certificate_pem will be our main focus
-
+    local certificate_pem, parsed = certificate_pairing(), nil
+    local transient = false
     if redis_strategy ~= nil then
-        -- ok, try to get it from redis
-        ngx_log(ngx_DEBUG, "Redis: lookup enabled")
+        ngx_log(ngx_DEBUG, 'Redis: lookup enabled')
         if not allowed_redis_strategy[redis_strategy] then
-            ngx_log(ngx_ERR,
-                "Redis: invalid `redis_strategy` not (1, 2) is `",
-                redis_strategy, "`"
-            )
+            ngx_log(ngx_ERR, 'Redis: invalid `redis_strategy` not (1, 2) is `', redis_strategy, '`')
             context.skip = true
             return nil, nil, -1
         end
-
-        -- grab redis connection
-        local redcon, err = get_redcon()
-        if redcon == nil then
-            ngx_log(ngx_ERR, "Redis: could not get connection")
+        local key, delay = retry_state('redis',
+            redis_server .. ':' .. redis_port .. ':' .. redis_db_number, redis_options)
+        local domain_key = key and key .. ':domain:' .. ngx.md5(server_name)
+        if key and (cert_cache:get(key) or cert_cache:get(domain_key)) then
             transient = true
+            ngx_log(ngx_DEBUG, 'Redis: retry cooldown active')
         else
-            -- actually query redis
-            if redis_strategy == 1 then
-                certificate_pem, err = prime_1__query_redis(redcon, server_name)
-            elseif redis_strategy == 2 then
-                certificate_pem, err = prime_2__query_redis(redcon, server_name)
-            end
-            if err then
-                transient = true
-                -- A failed command may leave an unusable socket; do not
-                -- return it to the keepalive pool.
-                redcon:close()
+            local failed, backend_failure = false, false
+            local redcon, err = get_redcon()
+            if not redcon then
+                failed, backend_failure = true, true
+                ngx_log(ngx_ERR, 'Redis: could not get connection')
             else
-                redis_keepalive(redcon)
+                if redis_strategy == 1 then
+                    certificate_pem, err, backend_failure = prime_1__query_redis(redcon, server_name)
+                else
+                    certificate_pem, err, backend_failure = prime_2__query_redis(redcon, server_name)
+                end
+                if err then failed = true; redcon:close() else redis_keepalive(redcon) end
+            end
+            local parse_err
+            parsed, parse_err = parse_backend_candidate(certificate_pem)
+            if parse_err then certificate_pem = certificate_pairing(); failed = true end
+            if failed then
+                retry_failed(backend_failure and key or domain_key, delay)
+                transient = true
+            else
+                retry_succeeded(key)
+                retry_succeeded(domain_key)
             end
         end
     end
-
-    if certificate_pairing_validate(certificate_pem) and not parsed then
-        parsed = certificate_pairing_pem_to_cdata(certificate_pem, {})
-        if not certificate_pairing_data(parsed) then
-            certificate_pem = certificate_pairing()
-            parsed = nil
+    if fallback_server ~= nil and not parsed then
+        local key, delay = retry_state('api', fallback_server, api_options)
+        local domain_key = key and key .. ':domain:' .. ngx.md5(server_name)
+        if key and (cert_cache:get(key) or cert_cache:get(domain_key)) then
             transient = true
-        end
-    end
-
-    -- use a fallback search?
-    -- checking for nil first is cheaper than checking
-    -- `certificate_pairing_data`
-    if fallback_server ~= nil then
-        if not certificate_pairing_data(certificate_pem) then
+            ngx_log(ngx_DEBUG, 'UpstreamAPI: retry cooldown active')
+        else
+            local query = query_api_upstream
             if enable_autocert ~= nil then
-                -- fallback autocert
-                ngx_log(ngx_DEBUG, "UpstreamAPI: autocert enabled")
-                -- wrap this within an autocert marker;
-                -- this will keep other workers from hitting it
-                -- Atomic acquisition closes the race between cache miss
-                -- and marker creation. A bounded lease recovers crashed workers.
-                local lock_key = server_name .. ":autocert_lock"
+                ngx_log(ngx_DEBUG, 'UpstreamAPI: autocert enabled')
+                local lock_key = server_name .. ':autocert_lock'
                 autocert_sequence = autocert_sequence + 1
                 local token = ngx.worker.pid() .. ':' .. autocert_sequence
-                local acquired = cert_cache:add(lock_key, token, cert_cache_duration)
-                if not acquired then context.skip = true; return nil, nil, -1 end
-                context.lock_key, context.lock_token = lock_key, token
-                set_autocertmarker_sharedcache(server_name)
-                local ok, result = pcall(query_api_autocert,
-                    fallback_server, server_name, cert_preferences)
-                -- The API call yields. Its lease may have expired or
-                -- been flushed and acquired by another worker meanwhile.
-                if cert_cache:get(lock_key) ~= token then
-                    ngx_log(ngx_DEBUG, "discarding obsolete autocert response: ", server_name)
+                if not cert_cache:add(lock_key, token, cert_cache_duration) then
                     context.skip = true
                     return nil, nil, -1
                 end
-                if not ok then
-                    ngx_log(ngx_ERR, "autocert request failed: ", result)
-                    context.transient = true
-                    return nil, 'autocert request failed'
-                end
-                certificate_pem = result
+                context.lock_key, context.lock_token = lock_key, token
+                set_autocertmarker_sharedcache(server_name)
+                query = query_api_autocert
             else
-                -- fallback query
-                ngx_log(ngx_DEBUG, "UpstreamAPI: lookup enabled")
-                certificate_pem = query_api_upstream(
-                    fallback_server, server_name, cert_preferences
-                )
+                ngx_log(ngx_DEBUG, 'UpstreamAPI: lookup enabled')
+            end
+            local ok, result = pcall(query, fallback_server, server_name, cert_preferences)
+            if context.lock_key and cert_cache:get(context.lock_key) ~= context.lock_token then
+                ngx_log(ngx_DEBUG, 'discarding obsolete autocert response: ', server_name)
+                context.skip = true
+                return nil, nil, -1
+            end
+            if not ok then
+                retry_failed(key, delay)
+                context.transient = true
+                ngx_log(ngx_ERR, 'API request failed for : ', server_name)
+                return nil, 'API request failed'
+            end
+            certificate_pem = result
+            local parse_err
+            parsed, parse_err = parse_backend_candidate(certificate_pem)
+            if parse_err or (certificate_pem and certificate_pem.transient) then
+                retry_failed(certificate_pem and certificate_pem.backend_failure and key or domain_key, delay)
+                transient = true
+                if parse_err then certificate_pem = certificate_pairing() end
+            else
+                retry_succeeded(key)
+                retry_succeeded(domain_key)
             end
         end
     end
-
-    transient = transient or (certificate_pem and certificate_pem.transient)
-    if certificate_pairing_validate(certificate_pem) and not parsed then
-        parsed = certificate_pairing_pem_to_cdata(certificate_pem, {})
-        if not certificate_pairing_data(parsed) then
-            certificate_pem = certificate_pairing()
-            parsed = nil
-            transient = true
-        end
-    end
-    -- Recheck after PEM parsing, and retain ownership until publishing
-    -- the cache result. A stale attempt must not publish negative state.
     if context.lock_key and cert_cache:get(context.lock_key) ~= context.lock_token then
         context.skip = true
         return nil, nil, -1
     end
-    if certificate_pairing_validate(certificate_pem) then
+    if parsed then
         context.packed = certificate_pem.cert .. string.char(0) .. certificate_pem.pkey
         context.cdata = parsed
         ngx_log(ngx_DEBUG, 'caching PEM cert & key into the shared cache : ', server_name)

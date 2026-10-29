@@ -31,6 +31,11 @@ Unreleased
 	- retain reproducible Valkey/Redis benchmarks under benchmarks/ with a make benchmark target
 	- compare pooled/fresh connections and fixed serial/pipeline references using monotonic timing and JSON reports
 	- added pipeline timeout, malformed-reply, and recovery regressions; 695 assertions pass against each backend
+	- add shared worker retry cooldowns for datastore and API failures, including autocert
+	- configure retry_backoff independently per backend: default 1 second, range 0-60, 0 disables
+	- preserve cached certificates and healthy API fallback; isolate corrupt-domain cooldowns from backend outages
+	- keep transient failures out of certificate negative caching and isolate cooldowns by connection identity
+	- add cross-worker cooldown and real HTTP recovery coverage; 776 assertions pass against each backend
 
 0.5.0
 	2021.03.16

@@ -9,6 +9,9 @@ return function(case)
     local cert, key = read('t/cert/test.example.com.crt'), read('t/cert/test.example.com.key')
     local invalid = {
         unknown = {typo = true},
+        negative_backoff = {retry_backoff = -1},
+        excessive_backoff = {retry_backoff = 61},
+        infinite_backoff = {retry_backoff = math.huge},
         username_only = {username = 'audit'},
         cert_only = {ssl = true, client_cert = cert},
         cert_plaintext = {client_cert = cert, client_key = key},

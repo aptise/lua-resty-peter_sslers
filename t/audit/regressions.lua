@@ -67,6 +67,8 @@ local function run(case)
     local ok, err = pcall(function()
         local m = assert(loadfile('lib/resty/peter_sslers.lua'))()
         m.initialize_worker(600, 60, 200)
+        m.redis_update_defaults('127.0.0.1', 6379, 9, {retry_backoff = 0})
+        m.api_update_defaults({retry_backoff = 0})
         if case == 'invalid_sni' then
             for _, name in ipairs({'bad/name', 'bad&name=other', '-bad.example', 'bad..example', string.rep('a', 64) .. '.com'}) do
                 sni = name

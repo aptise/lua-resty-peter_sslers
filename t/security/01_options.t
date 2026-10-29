@@ -295,3 +295,57 @@ GET /t
 ok
 --- no_error_log
 lua entry thread aborted
+
+=== TEST: negative_backoff
+--- http_config eval: $::HttpConfig
+--- config eval
+qq{
+    location /t {
+        content_by_lua_block {
+            assert(loadfile("$::pwd/t/security/options.lua"))()("negative_backoff")
+            ngx.say('ok')
+        }
+    }
+}
+--- request
+GET /t
+--- response_body
+ok
+--- no_error_log
+lua entry thread aborted
+
+=== TEST: excessive_backoff
+--- http_config eval: $::HttpConfig
+--- config eval
+qq{
+    location /t {
+        content_by_lua_block {
+            assert(loadfile("$::pwd/t/security/options.lua"))()("excessive_backoff")
+            ngx.say('ok')
+        }
+    }
+}
+--- request
+GET /t
+--- response_body
+ok
+--- no_error_log
+lua entry thread aborted
+
+=== TEST: infinite_backoff
+--- http_config eval: $::HttpConfig
+--- config eval
+qq{
+    location /t {
+        content_by_lua_block {
+            assert(loadfile("$::pwd/t/security/options.lua"))()("infinite_backoff")
+            ngx.say('ok')
+        }
+    }
+}
+--- request
+GET /t
+--- response_body
+ok
+--- no_error_log
+lua entry thread aborted

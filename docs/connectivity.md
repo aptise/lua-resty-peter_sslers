@@ -50,6 +50,7 @@ URL: use `https://` for TLS. Setting authentication does not enable encryption.
 | `client_cert` | Client certificate chain in PEM format | Client certificate chain in PEM format | Unset. PEM contents, not a filename. Requires `client_key`. |
 | `client_key` | Client private key in PEM format | Client private key in PEM format | Unset. Requires `client_cert`. |
 | `timeout` | Socket timeout in milliseconds | Socket timeout in milliseconds | Unset; inherits client/Nginx defaults. Must be positive when supplied. |
+| `retry_backoff` | Datastore lookup cooldown in seconds | API lookup cooldown in seconds | `1`. Accepts numbers from `0` through `60`, including fractional seconds; `0` disables cooldowns. |
 
 Unknown options and invalid values raise configuration errors. Datastore
 client certificates require `ssl = true`; API client certificates require an
@@ -60,6 +61,61 @@ credentials.
 For the API, Basic or Bearer authorization applies to both ordinary GET lookups
 and autocert POST requests. Keep credentials in the options table rather than
 embedding them in the URL, because request URLs appear in debug logs.
+
+## Retry cooldowns
+
+`set_ssl_certificate` applies a fixed cooldown after a failed backend lookup.
+The default is one second for each backend, including configurations that omit
+an options table. Set `retry_backoff` separately in the datastore and API options
+to change it. This value is in seconds; `timeout` is in milliseconds. It is a
+fixed delay, not exponential backoff.
+
+Cooldown markers are shared across workers in `cert_cache` and are separate
+from certificate entries and negative caching. During a cooldown, a cache miss
+skips that backend without waiting. Cached certificates remain available, and a
+datastore cooldown still permits API fallback. If no usable certificate is
+found, the configured default certificate remains in place. Cooldowns also
+apply to API autocert requests.
+
+Datastore connection, authentication, and transport failures cool down the
+configured datastore. API transport failures, request exceptions, and HTTP
+401, 403, 429, or 5xx responses cool down the configured API. Invalid PEM,
+malformed domain payloads, and datastore record/command errors cool down only
+the affected domain on that backend. Other unsuccessful API statuses except
+404 also receive a domain cooldown. Clean datastore misses, HTTP 404, and
+explicit API certificate absence retain the existing absence-caching behavior
+and do not start a cooldown.
+
+After expiry, the next cache miss can try again. A successful in-flight lookup
+clears the corresponding cooldown; failures arriving during an existing
+cooldown do not extend it. Requests already in flight may still complete, so
+this is not a limit of one concurrent request per backend. Markers use
+`safe_add`, which avoids evicting cached certificates; if shared memory is full,
+a cooldown may not be stored and later requests can retry immediately.
+
+Cooldown identities include the endpoint and connection options, allowing
+workers with the same configuration to share them. Changing credentials or
+connection settings uses a different identity; credentials are hashed rather
+than stored in dictionary keys. Configuration changes do not flush cached
+certificates. The low-level connection and query helpers remain direct calls
+and do not enforce these cooldowns.
+
+For example, merge these fields into your existing initialization options:
+
+```lua
+handler.valkey_update_defaults(host, port, database, {
+    retry_backoff = 0.5,
+    -- Include any existing authentication and TLS options here.
+})
+handler.api_update_defaults({
+    retry_backoff = 2,
+    -- Include any existing authentication and TLS options here.
+})
+```
+
+Supplying an options table replaces the previous options, so retain your
+credentials and TLS settings when changing the cooldown. Use `retry_backoff = 0`
+to restore immediate retries for a backend.
 
 ## Trust and client certificates
 
@@ -88,6 +144,7 @@ env PETER_SSLERS_API_PASSWORD;
 
 http {
     lua_shared_dict cert_cache 1m;
+    lua_shared_dict cert_cache_ipc 100k;
     lua_ssl_trusted_certificate /etc/nginx/backend-cas.pem;
     lua_ssl_verify_depth 3;
 

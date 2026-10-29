@@ -1,4 +1,4 @@
-# Resolver failure coverage
+# Network failure coverage
 
 Use the isolated fixture runner:
 
@@ -24,3 +24,9 @@ negative caching does not suppress a successful retry.
 
 Ordinary `prove -r t` skips these cases unless the runner supplies its fixtures.
 The complete secure CI runs include them for both Valkey and Redis.
+
+The HTTP retry test drives a real authenticated backend through an outage and
+recovery. It verifies that a 503 starts a shared one-second cooldown, cached
+credentials remain available, cooldowns do not create certificate absence
+entries, and requests resume after expiry. Cross-worker cooldown, fallback,
+credential isolation, and corrupt-domain coverage lives in `t/cache/03_retry_workers.t`.

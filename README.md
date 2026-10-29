@@ -71,10 +71,11 @@ handler.redis_update_defaults(host, port, database, options)
 ```
 
 The optional fourth argument configures password/ACL authentication, TLS,
-client certificates, and timeouts. Configure the Python backend separately with
+client certificates, timeouts, and retry cooldowns. Configure the Python backend
+separately with
 `handler.api_update_defaults(options)` for Basic/Bearer authentication, HTTPS
-verification, client certificates, and timeouts. Use an `https://` fallback URL
-to enable API TLS.
+verification, client certificates, timeouts, and retry cooldowns. Use an
+`https://` fallback URL to enable API TLS.
 
 See [Valkey, Redis, and secure API connections](docs/connectivity.md) for the
 options reference, runtime requirements, trusted-CA setup, and a complete
@@ -93,8 +94,9 @@ functionality, the following library is used:
 
 Successful API lookups are cached. Missing certificates can produce negative
 cache entries. Transport failures and HTTP statuses other than 200 and 404 do
-not create negative entries, so a subsequent handshake can retry. Malformed
-JSON, incomplete certificate fields, and API error payloads also permit retries.
+not create negative entries, so a subsequent handshake can retry after any active
+retry cooldown. Malformed JSON, incomplete certificate fields, and API error
+payloads also permit retries.
 An HTTP-200 response explicitly setting every requested certificate preference
 to JSON null can be negatively cached when it has no error, instructions, or
 form-errors fields. HTTP 404 remains a cacheable absence. Invalid PEM is rejected
@@ -328,8 +330,14 @@ backend lookups until it expires or is cleared. A worker can retain a negative
 entry for its LRU TTL after the shared marker expires. Datastore connection and
 command errors, API transport failures, malformed API responses,
 non-200/non-404 API responses, and invalid backend PEM do not create a new
-negative entry. There is no stale-certificate
-fallback after cache expiration and no retry backoff for transport failures.
+negative entry. Failed backends instead receive a short cooldown shared across
+workers: one second by default, configured independently for the datastore and
+API with `retry_backoff` (0–60 seconds; `0` disables it). Cached certificates
+remain available, and datastore cooldowns still allow API fallback. Invalid
+domain data cools down only that domain. See the
+[retry cooldown reference](docs/connectivity.md#retry-cooldowns)
+for failure classification and recovery behavior. There is no stale-certificate
+fallback after cache expiration.
 
 PEM parsing checks do not establish certificate hostname coverage, expiration,
 trust, or that the private key matches the certificate. Backends must supply

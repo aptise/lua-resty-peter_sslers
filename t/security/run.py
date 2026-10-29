@@ -142,6 +142,8 @@ def main():
                     if time.monotonic() > deadline:
                         raise RuntimeError('backend startup timeout')
                     time.sleep(.02)
+        api_outage = {'failed': True, 'calls': 0}
+        availability_lock = threading.Lock()
         certificate = (root/'t/cert/test.example.com.crt').read_text()
         private_key = (root/'t/cert/test.example.com.key').read_text()
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -167,6 +169,25 @@ def main():
                     self.send_error(401)
                     return
                 parsed = urllib.parse.urlparse(self.path)
+                if parsed.path in ('/retry/reset', '/retry/recover', '/retry/stats'):
+                    with availability_lock:
+                        if parsed.path == '/retry/reset':
+                            api_outage.update(failed=True, calls=0)
+                        elif parsed.path == '/retry/recover':
+                            api_outage['failed'] = False
+                        body = json.dumps(api_outage).encode()
+                    self.send_response(200)
+                    self.send_header('Content-Length', str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+                if parsed.path.startswith('/retry/backend/'):
+                    with availability_lock:
+                        api_outage['calls'] += 1
+                        unavailable = api_outage['failed']
+                    if unavailable:
+                        self.send_error(503)
+                        return
                 if parsed.path == '/dns/stats':
                     name = urllib.parse.parse_qs(parsed.query).get('name', [''])[0]
                     with dns_lock:

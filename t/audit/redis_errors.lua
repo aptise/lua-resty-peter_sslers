@@ -98,6 +98,8 @@ return function(case)
     local ok, err = pcall(function()
         local handler = assert(loadfile('lib/resty/peter_sslers.lua'))()
         handler.initialize_worker(600, 60, 200)
+        handler.redis_update_defaults('127.0.0.1', 6379, 9, {retry_backoff = 0})
+        handler.api_update_defaults({retry_backoff = 0})
         if case == 'redis_reuse_error' then
             local con, reason = handler.get_redcon()
             assert(con == nil and reason == 'closed socket', 'reuse-state error must be preserved')
