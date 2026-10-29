@@ -540,14 +540,30 @@ local function redis_domain_data(redcon, key_domain, ...)
 end
 
 
-local function redis_certificate_part(redcon, key)
-    local value, err = redcon:get(key)
-    if err or type(value) ~= 'string' then
-        err = err or 'missing or invalid Redis certificate part'
-        ngx_log(ngx_ERR, 'Redis: failed to retrieve part(', key, ') Err: ', err)
+local function redis_certificate_parts(redcon, keys)
+    -- Keep GET permissions and individual command errors, but send all three
+    -- reads in one round trip after discovering their IDs with HMGET.
+    redcon:init_pipeline(3)
+    for index = 1, 3 do redcon:get(keys[index]) end
+    local values, err = redcon:commit_pipeline()
+    if err or type(values) ~= 'table' then
+        err = err or 'invalid certificate pipeline response'
+        ngx_log(ngx_ERR, 'Redis: certificate pipeline failed: ', err)
         return nil, err
     end
-    return value
+    for index = 1, 3 do
+        local value = values[index]
+        if type(value) ~= 'string' then
+            if type(value) == 'table' and value[1] == false and type(value[2]) == 'string' then
+                err = value[2]
+            else
+                err = 'missing or invalid Redis certificate part'
+            end
+            ngx_log(ngx_ERR, 'Redis: failed to retrieve part(', keys[index], ') Err: ', err)
+            return nil, err
+        end
+    end
+    return values
 end
 
 
@@ -557,17 +573,15 @@ local function prime_1__query_redis(redcon, _server_name)
     local domain_data, err = redis_domain_data(redcon, 'd1:' .. _server_name, 'c', 'p', 'i')
     if not domain_data then return nil, err end
 
-    local pkey, cert, cacertchain
-    pkey, err = redis_certificate_part(redcon, 'p:' .. domain_data[2])
-    if not pkey then return nil, err end
-    cert, err = redis_certificate_part(redcon, 'c:' .. domain_data[1])
-    if not cert then return nil, err end
-    cacertchain, err = redis_certificate_part(redcon, 'i:' .. domain_data[3])
-    if not cacertchain then return nil, err end
+    local parts
+    parts, err = redis_certificate_parts(redcon, {
+        'p:' .. domain_data[2], 'c:' .. domain_data[1], 'i:' .. domain_data[3],
+    })
+    if not parts then return nil, err end
 
     local certificate_pem = certificate_pairing()
-    certificate_pem.cert = cert .. "\n" .. cacertchain
-    certificate_pem.pkey = pkey
+    certificate_pem.cert = parts[2] .. "\n" .. parts[3]
+    certificate_pem.pkey = parts[1]
     return certificate_pem
 end
 

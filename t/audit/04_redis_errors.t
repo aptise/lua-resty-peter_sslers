@@ -279,3 +279,75 @@ GET /t
 ok
 --- no_error_log
 [error]
+
+=== TEST: redis_pipeline_timeout
+--- config eval
+qq{
+    location /t {
+        content_by_lua_block {
+            local run = assert(loadfile("$::pwd/t/audit/redis_errors.lua"))()
+            run("redis_pipeline_timeout")
+            ngx.say("ok")
+        }
+    }
+}
+--- request
+GET /t
+--- response_body
+ok
+--- no_error_log
+[error]
+
+=== TEST: redis_pipeline_shape
+--- config eval
+qq{
+    location /t {
+        content_by_lua_block {
+            local run = assert(loadfile("$::pwd/t/audit/redis_errors.lua"))()
+            run("redis_pipeline_shape")
+            ngx.say("ok")
+        }
+    }
+}
+--- request
+GET /t
+--- response_body
+ok
+--- no_error_log
+[error]
+
+=== TEST: redis_pipeline_partial
+--- config eval
+qq{
+    location /t {
+        content_by_lua_block {
+            local run = assert(loadfile("$::pwd/t/audit/redis_errors.lua"))()
+            run("redis_pipeline_partial")
+            ngx.say("ok")
+        }
+    }
+}
+--- request
+GET /t
+--- response_body
+ok
+--- no_error_log
+[error]
+
+=== TEST: redis_pipeline_retry
+--- config eval
+qq{
+    location /t {
+        content_by_lua_block {
+            local run = assert(loadfile("$::pwd/t/audit/redis_errors.lua"))()
+            run("redis_pipeline_retry")
+            ngx.say("ok")
+        }
+    }
+}
+--- request
+GET /t
+--- response_body
+ok
+--- no_error_log
+[error]

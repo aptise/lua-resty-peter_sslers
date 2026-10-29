@@ -26,6 +26,11 @@ Unreleased
 	- reject unsupported TLS/mTLS client configurations explicitly
 	- added isolated Valkey/Redis and Python HTTP/TLS fixtures, test-secure target, and CI jobs
 	- documented secure connectivity options and fixture-backed verification
+	- pipeline prime-1 certificate-part GETs, reducing query round trips from four to two without changing ACL requirements
+	- preserve individual pipeline errors and retry after transport failures without negative caching
+	- retain reproducible Valkey/Redis benchmarks under benchmarks/ with a make benchmark target
+	- compare pooled/fresh connections and fixed serial/pipeline references using monotonic timing and JSON reports
+	- added pipeline timeout, malformed-reply, and recovery regressions; 695 assertions pass against each backend
 
 0.5.0
 	2021.03.16

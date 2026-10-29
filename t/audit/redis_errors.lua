@@ -8,6 +8,8 @@ return function(case)
         redis_get_false_p = true, redis_get_false_c = true, redis_get_false_i = true,
         redis_get_absent = true, redis_retry_1 = true, redis_retry_2 = true,
         redis_missing_1 = true, redis_missing_2 = true, redis_reuse_error = true,
+        redis_pipeline_timeout = true, redis_pipeline_shape = true, redis_pipeline_partial = true,
+        redis_pipeline_retry = true,
     }
     assert(known[case], 'unknown Redis regression')
     local saved_ngx = ngx
@@ -17,6 +19,7 @@ return function(case)
     local null, cache = {}, {}
     local api_calls, redis_calls, pooled, closed = 0, 0, 0, 0
     local fail = true
+    local queued
     local strategy = tonumber(case:match('([12])$')) or 1
     ngx = {null = null, log = function() end, header = {}, var = {},
         shared = {cert_cache = {
@@ -42,6 +45,12 @@ return function(case)
         set_cert = function() return true end,
         set_priv_key = function() return true end,
     }
+    local function read_part(key)
+            local component = case:match('get_false_([pci])')
+            if component and key:sub(1, 1) == component then return false, 'WRONGTYPE' end
+            if case == 'redis_get_absent' and key:sub(1, 1) == 'p' then return null end
+            return 'pem'
+    end
     local connection = {
         connect = function() return true end,
         get_reused_times = function()
@@ -55,14 +64,27 @@ return function(case)
             if case:match('partial') then return strategy == 1 and {'cert-id', null, 'chain-id'} or {'key', null} end
             if case:match('hmget_false') then return false, 'WRONGTYPE' end
             if case:match('shape') then return true end
-            if case:match('retry') and fail then return nil, 'timeout' end
+            if case:match('^redis_retry_') and fail then return nil, 'timeout' end
             return strategy == 1 and {'cert-id', 'key-id', 'chain-id'} or {'key', 'cert'}
         end,
+        init_pipeline = function() queued = {} end,
         get = function(_, key)
-            local component = case:match('get_false_([pci])')
-            if component and key:sub(1, 1) == component then return false, 'WRONGTYPE' end
-            if case == 'redis_get_absent' and key:sub(1, 1) == 'p' then return null end
-            return 'pem'
+            if queued then queued[#queued + 1] = key; return end
+            return read_part(key)
+        end,
+        commit_pipeline = function()
+            local pending = queued
+            queued = nil
+            if case == 'redis_pipeline_timeout' or (case == 'redis_pipeline_retry' and fail) then return nil, 'timeout' end
+            if case == 'redis_pipeline_shape' then return true end
+            if case == 'redis_pipeline_partial' then return {'pem'} end
+            local replies = {}
+            for index, key in ipairs(pending) do
+                local value, err = read_part(key)
+                if value == nil and err then return nil, err end
+                if value == false then replies[index] = {false, err} else replies[index] = value end
+            end
+            return replies
         end,
         set_keepalive = function() pooled = pooled + 1; return true end,
         close = function() closed = closed + 1; return true end,
