@@ -22,11 +22,7 @@ $ENV{REDIS_PORT} ||= "6379";
 #
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-# also
-# we may end up with a redcon, but invald
-# if that is the case, the response is
-# 	xx Redis: failed to connect to redis: 
-# 	++ Redis: failed to detect times:
+# Connection failures must be reported before querying connection reuse state.
 
 our $HttpConfig_GoodIp_BadRedisPort = qq{
     lua_package_path "$pwd/lib/?.lua;;";
@@ -176,7 +172,7 @@ cert_lrucache MISS for : test.example.com
 shared `cert_cache` MISS for : test.example.com
 Redis: lookup enabled
 Redis: about to connect to redis: 127.0.0.1:1
-Redis: failed to detect times:
+Redis: failed to connect to redis:
 Redis: could not get connection
 failed to retrieve PEM for : test.example.com
 unable to provide ssl for : test.example.com
@@ -201,7 +197,7 @@ cert_lrucache MISS for : test.example.com
 shared `cert_cache` MISS for : test.example.com
 Redis: lookup enabled
 Redis: about to connect to redis: nxdomain.example.com
-Redis: failed to detect times:
+Redis: failed to connect to redis:
 Redis: could not get connection
 failed to retrieve PEM for : test.example.com
 unable to provide ssl for : test.example.com

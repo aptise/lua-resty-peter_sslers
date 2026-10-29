@@ -116,6 +116,7 @@ local function api_response_to_cert(server_name, response, cert_preferences)
     -- returns: `certificate_pem`
     local cert, pkey
     local certificate_pem = certificate_pairing()
+    certificate_pem.transient = not response or (response.status ~= 200 and response.status ~= 404)
 
     if not response then
         ngx_log(ngx_ERR, 'API response - no response : ', server_name)
@@ -129,7 +130,7 @@ local function api_response_to_cert(server_name, response, cert_preferences)
         -- local body = response.body
         if status == 200 then
             body_value, err = cjson_safe_decode(response.body)
-            if body_value ~= nil and err == nil then
+            if type(body_value) == "table" and err == nil then
                 -- default cert_preferences
                 if cert_preferences == nil then
                     cert_preferences = {
@@ -137,11 +138,14 @@ local function api_response_to_cert(server_name, response, cert_preferences)
                         'certificate_signed__latest_single'
                     }
                 end
-                for index, value in next, cert_preferences do
+                for index, value in ipairs(cert_preferences) do
                     local _bv = body_value[value]
-                    if _bv ~= cjson_null and _bv ~= nil then
-                        cert = _bv['fullchain']['pem']
-                        pkey = _bv['private_key']['pem']
+                    if type(_bv) == 'table' and type(_bv.fullchain) == 'table'
+                        and type(_bv.private_key) == 'table'
+                        and type(_bv.fullchain.pem) == 'string'
+                        and type(_bv.private_key.pem) == 'string' then
+                        cert = _bv.fullchain.pem
+                        pkey = _bv.private_key.pem
                         break
                     end
                 end
@@ -166,7 +170,7 @@ local function api_response_to_cert(server_name, response, cert_preferences)
         elseif status == 404 then
             ngx_log(ngx_DEBUG, "API response 404 : ", server_name)
             body_value, err = cjson_safe_decode(response.body)
-            if body_value ~= nil then
+            if type(body_value) == "table" then
                 -- we expect a 'message' field
                 ngx_log(ngx_DEBUG,
                     "API response error : ", server_name,
@@ -222,8 +226,21 @@ end
 local function get_cert_sharedcache(server_name)
     -- this is a PEM certificate
     local certificate_pem = certificate_pairing()
-    certificate_pem['cert'] = cert_cache:get(server_name .. ":c")
-    certificate_pem['pkey'] = cert_cache:get(server_name .. ":k")
+    local packed = cert_cache:get(server_name .. ":pair")
+    if packed then
+        local separator = packed:find(string.char(0), 1, true)
+        if separator then
+            certificate_pem.cert = packed:sub(1, separator - 1)
+            certificate_pem.pkey = packed:sub(separator + 1)
+        end
+    else
+        -- Legacy entries are used only for markers. Certificate/key parts
+        -- from older workers must never be combined across updates.
+        local marker = cert_cache:get(server_name .. ":c")
+        if marker == 'x' or marker == 'ac' then
+            certificate_pem.cert, certificate_pem.pkey = marker, marker
+        end
+    end
     return certificate_pem
 end
 
@@ -246,8 +263,13 @@ end
 local function certificate_pairing_pem_to_cdata(
     certificate_pem, certificate_cdata
 )
-    certificate_cdata['cert'] = ssl_parse_pem_cert(certificate_pem['cert'])
-    certificate_cdata['pkey'] = ssl_parse_pem_priv_key(certificate_pem['pkey'])
+    local cert, cert_err = ssl_parse_pem_cert(certificate_pem['cert'])
+    local pkey, key_err = ssl_parse_pem_priv_key(certificate_pem['pkey'])
+    certificate_cdata['cert'] = cert
+    certificate_cdata['pkey'] = pkey
+    if not cert or not pkey then
+        ngx_log(ngx_ERR, 'invalid certificate PEM: ', cert_err or key_err or 'unknown')
+    end
     return certificate_cdata
 end
 
@@ -261,6 +283,7 @@ end
 
 
 local function set_autocertmarker_sharedcache(server_name)
+    cert_cache:delete(server_name .. ":pair")
     local success, err, forcible
     success, err, forcible = cert_cache:set(
         server_name .. ":c", 'ac', cert_cache_duration
@@ -282,6 +305,7 @@ end
 
 
 local function set_failmarker_sharedcache(server_name)
+    cert_cache:delete(server_name .. ":pair")
     local success, err, forcible
     success, err, forcible = cert_cache:set(
         server_name .. ":c", 'x', cert_cache_duration
@@ -319,19 +343,23 @@ local function set_cert_sharedcache(server_name, certificate_pem)
     ngx_log(ngx_DEBUG,
         "caching PEM cert & key into the shared cache : ", server_name
     )
-    -- scoping
-    local success, err, forcible
-    -- these 'set' functions have a return value
-    success, err, forcible = cert_cache:set(
-        server_name .. ":c", certificate_pem['cert'], cert_cache_duration
-    )
-    -- ngx_log(ngx_DEBUG,
-    --  "caching certificate_pem[cert] | success : ", success, " Err: ",  err)
-    success, err, forcible = cert_cache:set(
-        server_name .. ":k", certificate_pem['pkey'], cert_cache_duration
-    )
-    -- ngx_log(ngx_DEBUG,
-    --  "caching certificate_pem[pkey] | success : ", success, " Err: ",  err)
+    -- Keep individual parts for status compatibility; readers use only the
+    -- atomic pair entry. Failed writes invalidate the complete cached pair.
+    local ok, err = cert_cache:set(server_name .. ":c", certificate_pem.cert, cert_cache_duration)
+    if ok then
+        ok, err = cert_cache:set(server_name .. ":k", certificate_pem.pkey, cert_cache_duration)
+    end
+    if ok then
+        ok, err = cert_cache:set(server_name .. ":pair",
+            certificate_pem.cert .. string.char(0) .. certificate_pem.pkey, cert_cache_duration)
+    end
+    if not ok then
+        cert_cache:delete(server_name .. ":pair")
+        cert_cache:delete(server_name .. ":c")
+        cert_cache:delete(server_name .. ":k")
+        ngx_log(ngx_ERR, 'failed to cache certificate pair: ', err)
+    end
+    return ok, err
 end
 
 
@@ -360,7 +388,8 @@ local function get_redcon()
     local redcon = redis:new()
     -- Connect to redis.  NOTE: this is a pooled connection
     ngx_log(ngx_DEBUG, "Redis: about to connect to redis: ", redis_server, ":", redis_port)
-    local ok, err = pcall(redcon.connect, redcon, redis_server, redis_port)
+    local called, ok, err = pcall(redcon.connect, redcon, redis_server, redis_port)
+    if not called then err, ok = ok, nil end
     if not ok then
         ngx_log(ngx_ERR, "Redis: failed to connect to redis: ", err)
         return nil, err
@@ -374,7 +403,12 @@ local function get_redcon()
     end
     if times <= 0 then
         ngx_log(ngx_DEBUG, "Redis: changing to db:", redis_db_number, ", times:", times)
-        redcon:select(redis_db_number)
+        local ok, err = redcon:select(redis_db_number)
+        if not ok then
+            if redcon.close then redcon:close() end
+            ngx_log(ngx_ERR, "Redis: failed to select database: ", err)
+            return nil, err
+        end
     end
     return redcon
 end
@@ -603,6 +637,7 @@ local function set_ssl_certificate(
 
     -- used for fallbacks
     local certificate_pem = certificate_pairing()
+    local transient = false
 
     -- check worker lru cache first
     -- this stashes an actual cert
@@ -671,6 +706,7 @@ local function set_ssl_certificate(
                 local redcon, err = get_redcon()
                 if redcon == nil then
                     ngx_log(ngx_ERR, "Redis: could not get connection")
+                    transient = true
                 else
                     -- actually query redis
                     if redis_strategy == 1 then
@@ -680,6 +716,14 @@ local function set_ssl_certificate(
                     end
                     -- return the redcon to the connection pool
                     redis_keepalive(redcon)
+                end
+            end
+
+            if certificate_pairing_validate(certificate_pem) then
+                local parsed = certificate_pairing_pem_to_cdata(certificate_pem, {})
+                if not certificate_pairing_data(parsed) then
+                    certificate_pem = certificate_pairing()
+                    transient = true
                 end
             end
 
@@ -708,12 +752,25 @@ local function set_ssl_certificate(
                 end
             end
 
+            transient = transient or (certificate_pem and certificate_pem.transient)
+            if certificate_pairing_validate(certificate_pem) then
+                local parsed = certificate_pairing_pem_to_cdata(certificate_pem, {})
+                if not certificate_pairing_data(parsed) then
+                    certificate_pem = certificate_pairing()
+                    transient = true
+                end
+            end
             -- after all that work, if we finally have PEM...
             -- cache it!
             if certificate_pairing_validate(certificate_pem) then
                 set_cert_sharedcache(server_name, certificate_pem)
             else
                 ngx_log(ngx_DEBUG, "failed to retrieve PEM for : ", server_name)
+
+                if transient then
+                    ngx_log(ngx_DEBUG, "unable to provide ssl for : ", server_name)
+                    return
+                end
 
                 -- set a fail marker - SHARED cache
                 set_failmarker_sharedcache(server_name)
@@ -866,7 +923,9 @@ local function expire_ssl_certs()
         ngx_var.request_uri, '^' .. prefix .. '/domain/([%w-.]+)$'
     )
     if _domain then
-        cert_cache:delete(_domain)
+        cert_cache:delete(_domain .. ":pair")
+        cert_cache:delete(_domain .. ":c")
+        cert_cache:delete(_domain .. ":k")
         ngx_say('{"result": "success", "expired": "domain", "domain": "' ..
                 _domain ..'", "server": "peter_sslers:openresty", ' ..
                 '"server_version": "' .. _VERSION .. '"}'
