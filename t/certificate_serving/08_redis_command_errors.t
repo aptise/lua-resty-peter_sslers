@@ -23,7 +23,7 @@ sub error_config {
             content_by_lua_block {
                 local handler = require 'resty.peter_sslers'
                 local redcon = assert(handler.get_redcon())
-                local domain = 'redis-audit-' .. ngx.worker.pid() .. '.example.com'
+                local domain = 'redis-audit-$ENV{TEST_NGINX_FIXTURE_ID}-' .. ngx.worker.pid() .. '.example.com'
                 local keys = {'d1:' .. domain, 'd2:' .. domain,
                     'p:' .. domain, 'c:' .. domain, 'i:' .. domain}
                 local strategy = "$scenario" == 'hmget2' and 2 or 1

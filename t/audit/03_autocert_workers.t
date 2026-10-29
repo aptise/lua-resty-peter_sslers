@@ -14,11 +14,14 @@ sub worker_config {
         lua_shared_dict audit_control 100k;
         init_worker_by_lua_block {
             local start = assert(loadfile("$pwd/t/audit/autocert_workers.lua"))()
-            start("$scenario")
+            start("$scenario", $ENV{TEST_NGINX_SERVER_PORT})
         }
     };
 }
 our $Config = q{
+    location /expire {
+        content_by_lua_block { require('resty.peter_sslers').expire_ssl_certs() }
+    }
     location /t {
         content_by_lua_block {
             local control = ngx.shared.audit_control
@@ -83,6 +86,36 @@ ok
 
 === TEST: new_certificate with two real workers
 --- http_config eval: main::worker_config("new_certificate")
+--- config eval: $::Config
+--- request
+GET /t
+--- response_body
+ok
+--- no_error_log
+[error]
+
+=== TEST: flushed with two real workers
+--- http_config eval: main::worker_config("flushed")
+--- config eval: $::Config
+--- request
+GET /t
+--- response_body
+ok
+--- no_error_log
+[error]
+
+=== TEST: flushed_replaced with two real workers
+--- http_config eval: main::worker_config("flushed_replaced")
+--- config eval: $::Config
+--- request
+GET /t
+--- response_body
+ok
+--- no_error_log
+[error]
+
+=== TEST: evicted with two real workers
+--- http_config eval: main::worker_config("evicted")
 --- config eval: $::Config
 --- request
 GET /t

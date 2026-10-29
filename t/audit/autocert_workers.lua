@@ -1,9 +1,13 @@
 -- Exercise real shared dictionaries in two workers. Only TLS phase accessors
 -- and the HTTP transport are replaced; PEM parsing and worker LRUs are real.
-return function(scenario)
+return function(scenario, http_port)
     local control = ngx.shared.audit_control
     local cache = ngx.shared.cert_cache
     local worker = ngx.worker.id()
+    local cancelled = scenario == 'expired' or scenario == 'flushed'
+    local replaced = scenario == 'replaced' or scenario == 'exception'
+        or scenario == 'evicted' or scenario == 'flushed_replaced'
+    local real_http = require 'resty.http'
     local function wait_for(predicate)
         local deadline = ngx.now() + 5
         repeat
@@ -52,7 +56,7 @@ return function(scenario)
             if worker == 0 then
                 control:set('owner_pid', ngx.worker.pid())
                 control:set('first_started', true)
-                if scenario == 'pending' or scenario == 'expired' then
+                if scenario == 'pending' or cancelled then
                     wait_for(function() return control:get('release_first') end)
                 elseif scenario == 'new_certificate' then
                     wait_for(function() return control:get('replacement_done') end)
@@ -64,7 +68,7 @@ return function(scenario)
             else
                 control:set('replacement_token', cache:get(lock_key))
                 control:set('second_started', true)
-                if scenario == 'replaced' or scenario == 'exception' then
+                if replaced then
                     wait_for(function() return control:get('owner_done') end)
                 end
                 cert, key = new_cert, new_key
@@ -76,18 +80,19 @@ return function(scenario)
     } end}
     local handler = require 'resty.peter_sslers'
     package.loaded['ngx.ssl'] = ssl
-    handler.initialize_worker(scenario == 'pending' and 60 or 0.3, 0.1, 200)
+    handler.initialize_worker((scenario == 'pending' or scenario == 'evicted'
+        or scenario:match('^flushed')) and 60 or 0.3, 0.1, 200)
     local function lookup()
         handler.set_ssl_certificate(nil, 'http://injected-api', 1)
     end
     local function run()
         if worker == 0 then
             lookup()
-            if scenario == 'replaced' or scenario == 'exception' then
+            if replaced then
                 assert(cache:get(lock_key) == control:get('replacement_token'), 'late owner deleted replacement lock')
                 assert(cache:get(marker_key) == 'ac', 'late owner removed replacement marker')
                 assert(installed == 0, 'late owner installed obsolete credentials')
-            elseif scenario == 'expired' then
+            elseif cancelled then
                 assert(not packed_pair(), 'expired owner repopulated the cache')
                 assert(installed == 0, 'expired owner installed obsolete credentials')
             elseif scenario == 'new_certificate' then
@@ -110,8 +115,23 @@ return function(scenario)
                 lookup()
                 assert(installed == 1, 'contender could not read the shared certificate')
             else
-                wait_for(function() return cache:get(lock_key) == nil end)
-                if scenario == 'expired' then
+                if scenario:match('^flushed') then
+                    local response = assert(real_http.new():request_uri(
+                        'http://127.0.0.1:' .. http_port .. '/expire/all'))
+                    assert(response.status == 200, 'flush endpoint failed')
+                    assert(cache:get(lock_key) == nil, 'flush retained the old lease')
+                elseif scenario == 'evicted' then
+                    local forcible = false
+                    for index = 1, 64 do
+                        local ok, err, evicted = cache:set('lease-pressure-' .. index, string.rep('x', 65536))
+                        assert(ok, err)
+                        forcible = forcible or evicted
+                    end
+                    assert(forcible and cache:get(lock_key) == nil, 'test did not evict the active lease')
+                else
+                    wait_for(function() return cache:get(lock_key) == nil end)
+                end
+                if cancelled then
                     control:set('release_first', true)
                 else
                     lookup()

@@ -95,4 +95,4 @@ jobs:
       - name: Test isolated password, TLS, and mTLS connections
         env:
           TEST_NGINX_NO_SHUFFLE: '1'
-        run: python3 t/security/run.py --backend ${{ matrix.backend }} --full-suite
+        run: python3 t/security/run.py --backend ${{ matrix.backend }} --full-suite --parallel-fixtures 2

@@ -11,6 +11,7 @@ import socket
 import subprocess
 import tempfile
 import time
+import uuid
 
 
 def main():
@@ -46,7 +47,7 @@ def main():
                         if time.monotonic() >= deadline: raise RuntimeError('backend startup timed out')
                         time.sleep(.02)
                 result = subprocess.run([resty, '--shdict', 'cert_cache 1m', '--shdict', 'cert_cache_ipc 100k',
-                    '-I', str(root/'lib'), str(root/'benchmarks/datastore.lua'), '127.0.0.1', str(port), str(args.iterations)],
+                    '-I', str(root/'lib'), str(root/'benchmarks/datastore.lua'), '127.0.0.1', str(port), str(args.iterations), uuid.uuid4().hex],
                     cwd=root, capture_output=True, text=True, env=os.environ.copy())
                 if result.returncode:
                     raise RuntimeError('OpenResty benchmark failed:\n'+result.stderr.strip())

@@ -70,3 +70,32 @@ integration tests; they do not replace them.
 CI runs the complete fixture-backed suite separately for Valkey and Redis on a
 modern OpenResty image. The older OpenResty matrix still exercises the ordinary
 suite without requiring mTLS support.
+
+## Resolver and parallel-fixture audits
+
+The runner also supplies a loopback UDP DNS fixture. Complete runs use it for
+datastore resolver tests rather than a public DNS service. Focus the resolver
+or cache-pressure cases with repeatable `--test` options:
+
+```sh
+python3 t/security/run.py --test t/network --test t/cache/02_pressure.t
+```
+
+`--test` and `--full-suite` are mutually exclusive. To verify concurrent TLS
+fixture runs against the same datastore before running the suite:
+
+```sh
+python3 t/security/run.py --full-suite --parallel-fixtures 2
+```
+
+Each concurrent run has separate Nginx ports/runtime files and a random fixture
+identity. The certificate-serving tests use run- and worker-specific SNI names
+covered by the test wildcard certificate, preserving hostname verification.
+Their datastore keys are removed and checked after lookup. Other datastore
+fixtures and benchmarks also use random run identities plus worker IDs, so
+identical PIDs in separate containers do not share keys.
+
+After successful tests, the runner checks that its exclusive plaintext and
+authenticated instances have no fixture keys left in databases 8 and 9. It
+asserts cleanup rather than hiding leaks with a database flush. Secure CI runs
+the parallel-fixture check for both backends.

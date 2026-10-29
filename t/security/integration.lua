@@ -16,7 +16,7 @@ return function(case, directory)
         local port = ports.auth
         redis_config(port, {password = 'test-password'}, 9)
         local connection = assert(handler.get_redcon())
-        local test_key = 'db-isolation-' .. ngx.worker.pid()
+        local test_key = 'db-isolation-' .. ports.fixture_id .. '-' .. ngx.worker.pid()
         assert(connection:set(test_key, 'database-nine'))
         handler.redis_keepalive(connection)
         handler.valkey_update_defaults('127.0.0.1', port, 8)
@@ -72,7 +72,7 @@ return function(case, directory)
     if case == 'prime_formats' then
         redis_config(ports.plain, {})
         local connection = assert(handler.get_redcon())
-        local domain = 'secure-test-' .. ngx.worker.pid() .. '.example.com'
+        local domain = 'secure-test-' .. ports.fixture_id .. '-' .. ngx.worker.pid() .. '.example.com'
         local pem_cert = read('t/cert/test.example.com.crt')
         local pem_key = read('t/cert/test.example.com.key')
         local keys = {'d1:' .. domain, 'd2:' .. domain, 'c:' .. domain, 'p:' .. domain, 'i:' .. domain}

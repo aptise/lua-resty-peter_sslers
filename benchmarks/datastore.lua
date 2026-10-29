@@ -16,7 +16,7 @@ local function read(path)
     local file = assert(io.open(path)); local value = file:read('*a'); file:close(); return value
 end
 local cert, key = read('t/cert/test.example.com.crt'), read('t/cert/test.example.com.key')
-local domain = 'benchmark-' .. ngx.worker.pid() .. '.example.com'
+local domain = 'benchmark-' .. assert(arg[4], 'fixture namespace required') .. '-' .. ngx.worker.pid() .. '.example.com'
 local keys = {'d1:' .. domain, 'd2:' .. domain, 'c:' .. domain, 'p:' .. domain, 'i:' .. domain}
 local connection = assert(handler.get_redcon())
 assert(connection:hmset(keys[1], 'c', domain, 'p', domain, 'i', domain))

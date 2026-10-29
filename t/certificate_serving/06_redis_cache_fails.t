@@ -5,7 +5,7 @@ use Test::Nginx::Socket::Lua 'no_plan';
 use Cwd qw(cwd);
 
 my $pwd = cwd();
-$ENV{TEST_NGINX_RESOLVER} ||= '1.1.1.1';
+$ENV{TEST_NGINX_RESOLVER} ||= '127.0.0.1:1';
 $ENV{TEST_NGINX_PWD} ||= $pwd;
 $ENV{TEST_COVERAGE} ||= 0;
 $ENV{TEST_NGINX_HTML_DIR} ||= html_dir();
@@ -47,6 +47,7 @@ our $HttpConfig_GoodIp_BadRedisPort = qq{
         listen unix:$ENV{TEST_NGINX_HTML_DIR}/nginx.sock ssl;
         server_name example.com;  # fallback domain
         resolver $ENV{TEST_NGINX_RESOLVER};
+        resolver_timeout 100ms;
         ssl_certificate_by_lua_block  {
             ngx.log(ngx.DEBUG, "server: ssl_certhandler")
 
@@ -96,6 +97,7 @@ our $HttpConfig_BadRedisHostname = qq{
         listen unix:$ENV{TEST_NGINX_HTML_DIR}/nginx.sock ssl;
         server_name example.com;  # fallback domain
         resolver $ENV{TEST_NGINX_RESOLVER};
+        resolver_timeout 100ms;
         ssl_certificate_by_lua_block  {
             ngx.log(ngx.DEBUG, "server: ssl_certhandler")
 

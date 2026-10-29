@@ -37,49 +37,8 @@ our $HttpConfig_2 = qq{
         ssl_certificate_by_lua_block  {
             ngx.log(ngx.DEBUG, "server: ssl_certhandler")
 
-            -- requirements
-            local ssl_certhandler = require "resty.peter_sslers"
-            ssl_certhandler.redis_update_defaults("$ENV{REDIS_HOST}", "$ENV{REDIS_PORT}", 9)
-
-			-- PRIME START
-			-- load the cert into the Redis cache
-            ngx.log(ngx.DEBUG, "PRIME REDIS 2 | START")
-			local certificate_pem = ssl_certhandler.certificate_pairing()
-			local f = assert(io.open("t/cert/test.example.com.crt", "r"))
-			certificate_pem['cert'] = f:read("*all")
-			f:close()           
-			local f = assert(io.open("t/cert/test.example.com.key", "r"))
-			certificate_pem['pkey'] = f:read("*all")
-			f:close()           
-
-			-- use the packages redis connection
-			local redcon = ssl_certhandler.get_redcon()
-
-			-- 1. prime domain
-			-- prime domain: A- core entry
-			local key = "d2:test.example.com"
-			local val = {}
-			 -- fullchain
-			 val["f"] = certificate_pem['cert']
-			 -- pkey
-			 val["p"] = certificate_pem['pkey']
-			local res, err = redcon:hmset(key, val)
-			if not res then
-	            ngx.log(ngx.ERR, "failed to set DOMAIN: ", err)
-				ngx.say("failed to set DOMAIN: ", err)
-				return
-			end
-            ngx.log(ngx.DEBUG, "PRIME REDIS 2 | END")
-			-- PRIME END
-		
-            -- alias functions
-            local ssl_certhandler_set = ssl_certhandler.set_ssl_certificate
-            
-            -- nil to disable
-            local redis_strategy = 2
-            local fallback_server = nil
-            local enable_autocert = nil
-            ssl_certhandler_set(redis_strategy, fallback_server, enable_autocert)
+            local serve = assert(loadfile("$pwd/t/lib/datastore_fixture.lua"))()
+            serve(2, "$ENV{REDIS_HOST}", "$ENV{REDIS_PORT}")
         }
         ssl_certificate "$pwd/t/cert/example.com.crt";  # fallback cert
         ssl_certificate_key "$pwd/t/cert/example.com.key";  # fallback key
@@ -106,7 +65,7 @@ our $Config = qq{
                     return
                 end
                 ngx.say("connected: ", ok)
-                local sess, err = sock:sslhandshake(nil, "test.example.com", true)
+                local sess, err = sock:sslhandshake(nil, "prime2-$ENV{TEST_NGINX_FIXTURE_ID}-" .. ngx.worker.pid() .. ".test.example.com", true)
                 if not sess then
                     ngx.say("failed to do SSL handshake: ", err)
                     return
@@ -131,25 +90,27 @@ GET /t
 --- response_body
 connected: 1
 SSL handshake OK!
---- error_log
-[notice]
-peter_sslers.initialize
-peter_sslers.initialize_worker
-[debug]
-Redis: changing to db:9, times:0
-set_ssl_certificate
-ssl_certhandler_set(): set_ssl_certificate : test.example.com
-ssl_certhandler_set(): SNI Lookup for : test.example.com
-cert_lrucache MISS for : test.example.com
-shared `cert_cache` MISS for : test.example.com
-Redis: lookup enabled
-Redis: prime_2__query_redis : test.example.com
-caching PEM cert & key into the shared cache : test.example.com
-caching cert & key cdata into the worker : test.example.com
-set ssl certificate : test.example.com
-set ssl private key : test.example.com
+--- error_log eval
+[
+    qr{\[notice\]},
+    qr{peter_sslers\.initialize},
+    qr{peter_sslers\.initialize_worker},
+    qr{\[debug\]},
+    qr{Redis:\ changing\ to\ db:9,\ times:0},
+    qr{set_ssl_certificate},
+    qr{set_ssl_certificate\ :\ prime2-[a-z0-9-]+-\d+\.test\.example\.com},
+    qr{SNI\ Lookup\ for\ :\ prime2-[a-z0-9-]+-\d+\.test\.example\.com},
+    qr{cert_lrucache\ MISS\ for\ :\ prime2-[a-z0-9-]+-\d+\.test\.example\.com},
+    qr{shared\ `cert_cache`\ MISS\ for\ :\ prime2-[a-z0-9-]+-\d+\.test\.example\.com},
+    qr{Redis:\ lookup\ enabled},
+    qr{Redis:\ prime_2__query_redis\ :\ prime2-[a-z0-9-]+-\d+\.test\.example\.com},
+    qr{caching\ PEM\ cert\ \&\ key\ into\ the\ shared\ cache\ :\ prime2-[a-z0-9-]+-\d+\.test\.example\.com},
+    qr{caching\ cert\ \&\ key\ cdata\ into\ the\ worker\ :\ prime2-[a-z0-9-]+-\d+\.test\.example\.com},
+    qr{set\ ssl\ certificate\ :\ prime2-[a-z0-9-]+-\d+\.test\.example\.com},
+    qr{set\ ssl\ private\ key\ :\ prime2-[a-z0-9-]+-\d+\.test\.example\.com},
+]
 --- no_error_log
 Redis: invalid `redis_strategy` not (1, 2) is `
 Redis: could not get connection
-failed to set ssl certificate : test.example.com
-failed to set ssl private key : test.example.com
+failed to set ssl certificate :
+failed to set ssl private key :
