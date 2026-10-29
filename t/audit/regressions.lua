@@ -7,10 +7,16 @@ local function run(case)
     local cache, api_calls, selected = {}, 0, 0
     local fail_key_write = false
     local payload = {}
+    local sni = "test.example.com"
+    local deny_lock, throw_api = false, false
     local fail_connect, fail_select, corrupt, outage = false, false, false, false
     local function dict()
         return {
             get = function(_, k) return cache[k] end,
+            add = function(_, k, v)
+                if deny_lock or cache[k] ~= nil then return nil, 'exists' end
+                cache[k] = v; return true
+            end,
             set = function(_, k, v)
                 if fail_key_write and k == 'test.example.com:k' then return nil, 'no memory' end
                 cache[k] = v; return true
@@ -29,7 +35,7 @@ local function run(case)
             set = function(_, k, v) values[k] = v end}
     end}
     package.loaded['ngx.ssl'] = {
-        server_name = function() return 'test.example.com' end,
+        server_name = function() return sni end,
         parse_pem_cert = function(v) if v == 'bad' then return nil, 'bad PEM' end return v end,
         parse_pem_priv_key = function(v) return v end,
         clear_certs = function() return true end,
@@ -47,6 +53,7 @@ local function run(case)
     package.loaded['resty.http'] = {new = function() return {
         request_uri = function()
             api_calls = api_calls + 1
+            if throw_api then error("injected HTTP exception") end
             if outage then return nil, 'timeout' end
             return {status = 200, body = 'injected response'}
         end,
@@ -54,7 +61,27 @@ local function run(case)
     local ok, err = pcall(function()
         local m = assert(loadfile('lib/resty/peter_sslers.lua'))()
         m.initialize_worker(600, 60, 200)
-        if case == 'happy' then
+        if case == 'invalid_sni' then
+            for _, name in ipairs({'bad/name', 'bad&name=other', '-bad.example', 'bad..example', string.rep('a', 64) .. '.com'}) do
+                sni = name
+                m.set_ssl_certificate(nil, 'http://backend', 1)
+            end
+            assert(api_calls == 0, 'invalid SNI must never reach the backend')
+        elseif case == 'canonical_sni' then
+            sni = 'TEST.Example.COM.'
+            payload = {certificate_signed__latest_multi = {fullchain = {pem = 'cert'}, private_key = {pem = 'key'}}}
+            m.set_ssl_certificate(nil, 'http://backend', nil)
+            assert(cache['test.example.com:pair'], 'DNS case and final dot must share a cache key')
+        elseif case == 'lock_busy' then
+            deny_lock = true
+            m.set_ssl_certificate(nil, 'http://backend', 1)
+            assert(api_calls == 0, 'losing atomic lock acquisition must not provision')
+        elseif case == 'api_exception' then
+            throw_api = true
+            m.set_ssl_certificate(nil, 'http://backend', 1)
+            assert(cache['test.example.com:autocert_lock'] == nil, 'exception must release autocert lock')
+            assert(cache['test.example.com:c'] ~= 'ac', 'exception must clear autocert marker')
+        elseif case == 'happy' then
             payload = {certificate_signed__latest_multi = {fullchain = {pem = 'cert'}, private_key = {pem = 'key'}}}
             m.set_ssl_certificate(nil, 'http://backend', nil)
             m.set_ssl_certificate(nil, 'http://backend', nil)

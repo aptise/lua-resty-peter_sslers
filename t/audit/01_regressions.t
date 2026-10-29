@@ -186,3 +186,75 @@ GET /t
 ok
 --- no_error_log
 [error]
+
+=== TEST: invalid_sni
+--- config eval
+qq{
+    location /t {
+        content_by_lua_block {
+            local run = assert(loadfile("$::pwd/t/audit/regressions.lua"))()
+            run("invalid_sni")
+            ngx.say("ok")
+        }
+    }
+}
+--- request
+GET /t
+--- response_body
+ok
+--- no_error_log
+[error]
+
+=== TEST: canonical_sni
+--- config eval
+qq{
+    location /t {
+        content_by_lua_block {
+            local run = assert(loadfile("$::pwd/t/audit/regressions.lua"))()
+            run("canonical_sni")
+            ngx.say("ok")
+        }
+    }
+}
+--- request
+GET /t
+--- response_body
+ok
+--- no_error_log
+[error]
+
+=== TEST: lock_busy
+--- config eval
+qq{
+    location /t {
+        content_by_lua_block {
+            local run = assert(loadfile("$::pwd/t/audit/regressions.lua"))()
+            run("lock_busy")
+            ngx.say("ok")
+        }
+    }
+}
+--- request
+GET /t
+--- response_body
+ok
+--- no_error_log
+[error]
+
+=== TEST: api_exception
+--- config eval
+qq{
+    location /t {
+        content_by_lua_block {
+            local run = assert(loadfile("$::pwd/t/audit/regressions.lua"))()
+            run("api_exception")
+            ngx.say("ok")
+        }
+    }
+}
+--- request
+GET /t
+--- response_body
+ok
+--- no_error_log
+[error]

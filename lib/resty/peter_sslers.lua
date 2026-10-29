@@ -547,6 +547,22 @@ local function prime_2__query_redis(redcon, _server_name)
 end
 
 
+-- SNI is client input. Accept DNS names (including IDNA ASCII labels),
+-- and canonicalize before using a name in a cache key or backend request.
+local function canonical_server_name(name)
+    if type(name) ~= 'string' then return nil end
+    name = name:lower():gsub('%.$', '')
+    if #name == 0 or #name > 253 or name:find('[^a-z0-9%.%-]')
+        or name:find('..', 1, true) then return nil end
+    for label in name:gmatch('[^.]+') do
+        if #label > 63 or not label:match('^[a-z0-9]')
+            or not label:match('[a-z0-9]$') then return nil end
+    end
+    if name:sub(1, 1) == '.' or name:sub(-1) == '.' then return nil end
+    return name
+end
+
+
 local function query_api_upstream(
     fallback_server, server_name, cert_preferences
 )
@@ -556,6 +572,9 @@ local function query_api_upstream(
     --
     -- returns: certificate_pem - a pairing that may be valid or invalid
     ngx_log(ngx_DEBUG, "query_api_upstream : ", server_name)
+
+    server_name = canonical_server_name(server_name)
+    if not server_name then return certificate_pairing() end
 
     local data_uri = fallback_server .. "/domain/" .. server_name ..
         "/config.json?openresty=1"
@@ -581,12 +600,16 @@ local function query_api_autocert(
     -- returns: certificate_pem - a pairing that may be valid or invalid
     ngx_log(ngx_DEBUG, "query_api_autocert : ", server_name)
 
+    server_name = canonical_server_name(server_name)
+    if not server_name then return certificate_pairing() end
+
     local data_uri = fallback_server .. "/api/domain/autocert.json?openresty=1"
     ngx_log(ngx_DEBUG, "querying autocert API server at: ", data_uri)
     local httpc = http_new()
     local response, err = httpc:request_uri(data_uri, {
         method = "POST",
         body = "domain_name=" .. server_name,
+        headers = {["Content-Type"] = "application/x-www-form-urlencoded"},
     })
     -- response could be nil on a failure, but passing it into the
     -- following function will give us an empty cert
@@ -633,6 +656,8 @@ local function set_ssl_certificate(
         -- exit out and just fall back on the default ssl cert
         return
     end
+    server_name = canonical_server_name(server_name)
+    if not server_name then return end
     ngx_log(ngx_DEBUG, "SNI Lookup for : ", server_name)
 
     -- used for fallbacks
@@ -737,11 +762,21 @@ local function set_ssl_certificate(
                         ngx_log(ngx_DEBUG, "UpstreamAPI: autocert enabled")
                         -- wrap this within an autocert marker;
                         -- this will keep other workers from hitting it
+                        -- Atomic acquisition closes the race between cache miss
+                        -- and marker creation. A bounded lease recovers crashed workers.
+                        local lock_key = server_name .. ":autocert_lock"
+                        local acquired = cert_cache:add(lock_key, true, cert_cache_duration)
+                        if not acquired then return end
                         set_autocertmarker_sharedcache(server_name)
-                        certificate_pem = query_api_autocert(
-                            fallback_server, server_name, cert_preferences
-                        )
+                        local ok, result = pcall(query_api_autocert,
+                            fallback_server, server_name, cert_preferences)
                         clear_autocertmarker_sharedcache(server_name)
+                        cert_cache:delete(lock_key)
+                        if not ok then
+                            ngx_log(ngx_ERR, "autocert request failed: ", result)
+                            return
+                        end
+                        certificate_pem = result
                     else
                         -- fallback query
                         ngx_log(ngx_DEBUG, "UpstreamAPI: lookup enabled")
