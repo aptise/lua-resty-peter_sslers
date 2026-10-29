@@ -42,7 +42,7 @@ jobs:
       run: |
         apk add --no-cache curl perl bash wget git perl-dev libarchive-tools redis
         ln -s /usr/bin/bsdtar /usr/bin/tar
-        opm get ledgetech/lua-resty-http thibaultcha/lua-resty-mlcache
+        opm get ledgetech/lua-resty-http thibaultcha/lua-resty-mlcache fffonion/lua-resty-openssl
         /usr/bin/redis-server /etc/redis.conf &
 
     - name: Install CPAN
@@ -89,7 +89,7 @@ jobs:
       - name: Install secure test dependencies
         run: |
           apk add --no-cache python3 openssl perl perl-dev make ${{ matrix.backend }}
-          opm get ledgetech/lua-resty-http thibaultcha/lua-resty-mlcache
+          opm get ledgetech/lua-resty-http thibaultcha/lua-resty-mlcache fffonion/lua-resty-openssl
           PERL_MM_USE_DEFAULT=1 cpan App::cpanminus
           cpanm -n Test::Nginx
       - name: Test isolated password, TLS, and mTLS connections

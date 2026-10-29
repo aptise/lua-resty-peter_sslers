@@ -122,3 +122,18 @@ The flow looks like this:
 * During the TLS handshake with A, a query is sent to
   http://B/.well-known/admin/domain/test.example.com/config.json    
     
+
+# Certificate/key validation and installation failures
+
+`t/audit/05_installation.t` uses real PEM parsing and OpenSSL key matching with
+controlled TLS setters. It covers mismatched keys (including a key belonging to
+a later certificate in a chain), malformed PEM, shared-cache rejection,
+datastore-to-API fallback, and stopping at each failed installation step. A
+worker LRU hit must reuse the validated pair without another key-match check.
+
+`09_validation.t` performs actual verified TLS handshakes over a Unix socket.
+Mismatched backend and legacy shared-cache pairs must preserve the configured
+default certificate. A valid dynamic pair must serve successfully. Injected
+clear, certificate-set, and key-set failures must abort the handshake and stop
+further installation calls. These cases require `lua-resty-openssl` and run
+without a datastore service; the full Valkey and Redis fixture runs include them.

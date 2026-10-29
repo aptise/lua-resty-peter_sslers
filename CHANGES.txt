@@ -36,6 +36,11 @@ Unreleased
 	- preserve cached certificates and healthy API fallback; isolate corrupt-domain cooldowns from backend outages
 	- keep transient failures out of certificate negative caching and isolate cooldowns by connection identity
 	- add cross-worker cooldown and real HTTP recovery coverage; 776 assertions pass against each backend
+	- require lua-resty-openssl and validate that private keys match leaf certificates before caching/installing
+	- reject mismatched backend and shared-cache pairs without clearing default credentials; retain datastore-to-API fallback
+	- check clear_certs errors and explicitly abort TLS handshakes on clearing or installation failures
+	- add real key-match regressions, worker-cache reuse checks, and verified TLS installation-failure coverage
+	- verified 824 assertions against each of Valkey and Redis, including parallel fixture and cleanup checks
 
 0.5.0
 	2021.03.16

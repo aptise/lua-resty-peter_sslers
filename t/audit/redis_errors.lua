@@ -13,7 +13,8 @@ return function(case)
     }
     assert(known[case], 'unknown Redis regression')
     local saved_ngx = ngx
-    local names = {'cjson.safe', 'resty.lrucache', 'resty.redis', 'ngx.ssl', 'resty.http', 'resty.mlcache'}
+    local names = {'cjson.safe', 'resty.lrucache', 'resty.redis', 'ngx.ssl', 'resty.http', 'resty.mlcache',
+        'resty.openssl.x509', 'resty.openssl.pkey'}
     local saved = {}
     for _, name in ipairs(names) do saved[name] = package.loaded[name] end
     local null, cache = {}, {}
@@ -37,6 +38,10 @@ return function(case)
             get = function(_, k) return values[k] end,
             set = function(_, k, v) values[k] = v end}
     end}
+    package.loaded['resty.openssl.x509'] = {new = function()
+        return {check_private_key = function() return true end}
+    end}
+    package.loaded['resty.openssl.pkey'] = {new = function() return {} end}
     package.loaded['ngx.ssl'] = {
         server_name = function() return 'test.example.com' end,
         parse_pem_cert = function(v) assert(type(v) == 'string'); return v end,

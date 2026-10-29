@@ -297,8 +297,9 @@ A fully configured example is available in the main peter_sslers repo:
 
 For each handshake, the handler checks the worker LRU, the shared dictionary,
 Valkey/Redis if enabled, and finally the API if configured. Certificate and key
-PEM must parse before a backend result is cached. Invalid datastore PEM allows
-the API fallback to run. Connection, authentication, database-selection, and
+PEM must parse, and the private key must match the leaf certificate, before a
+backend result is cached. Invalid or mismatched datastore pairs allow the API
+fallback to run. Connection, authentication, database-selection, and
 command errors reject the affected datastore connection. Command errors,
 wrong-type keys, partial records, and missing referenced certificate parts can
 fall through to the API and remain retryable; only an all-null domain lookup is
@@ -339,11 +340,18 @@ domain data cools down only that domain. See the
 for failure classification and recovery behavior. There is no stale-certificate
 fallback after cache expiration.
 
-PEM parsing checks do not establish certificate hostname coverage, expiration,
-trust, or that the private key matches the certificate. Backends must supply
-correct certificate material. A failure while installing a certificate or key
-is logged; after the default certificate has been cleared, the handshake can
-fail rather than fall back to it.
+Certificate/key matching uses `lua-resty-openssl` when loading a pair from a
+backend or shared cache into a worker. Worker LRU hits reuse the validated pair.
+Mismatched pairs leave the default credentials untouched and do not create a
+negative cache entry. Invalid shared-cache material is also rejected before
+installation, including entries published by an older worker.
+
+These checks do not establish hostname coverage, expiration, or certificate
+trust. Backends must supply appropriate certificate material, with the leaf
+certificate first in the PEM chain. A failure clearing default credentials or
+installing a certificate or key is logged and explicitly aborts the TLS
+handshake. Installation stops at the failed step; there is no rollback to the
+default credentials after clearing begins.
 
 ### Integration/Debugging HowTo
 
@@ -382,12 +390,13 @@ expire
 ### Tests
 
 Run commands from the repository root. Install OpenResty, `lua-resty-http`,
-Valkey (preferred) or Redis, and the Perl test harness:
+`lua-resty-mlcache`, `lua-resty-openssl`, Valkey (preferred) or Redis, and the Perl
+test harness:
 
 ```sh
 cpan App::cpanminus
 cpanm Test::Nginx
-opm get ledgetech/lua-resty-http
+opm get ledgetech/lua-resty-http thibaultcha/lua-resty-mlcache fffonion/lua-resty-openssl
 ```
 
 The datastore integration tests write fixture keys in database **9**, including

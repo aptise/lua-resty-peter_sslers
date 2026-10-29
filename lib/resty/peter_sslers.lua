@@ -6,6 +6,8 @@ local lrucache = require "resty.lrucache"
 local mlcache = require "resty.mlcache"
 local redis = require "resty.redis"
 local ssl = require "ngx.ssl"
+local x509 = require "resty.openssl.x509"
+local pkey_lib = require "resty.openssl.pkey"
 
 -- we may not need resty.http,
 -- but including it here is better for memory if we need it
@@ -292,11 +294,22 @@ end
 certificate_pairing_pem_to_cdata = function(certificate_pem, certificate_cdata)
     local cert, cert_err = ssl_parse_pem_cert(certificate_pem['cert'])
     local pkey, key_err = ssl_parse_pem_priv_key(certificate_pem['pkey'])
-    certificate_cdata['cert'] = cert
-    certificate_cdata['pkey'] = pkey
     if not cert or not pkey then
         ngx_log(ngx_ERR, 'invalid certificate PEM: ', cert_err or key_err or 'unknown')
+        certificate_cdata.cert, certificate_cdata.pkey = nil, nil
+        return certificate_cdata
     end
+    -- Validate the leaf/key relationship only on L3 fetches and L2 loads.
+    -- Use public APIs; ngx.ssl cdata layouts and ownership are private.
+    local leaf = x509.new(certificate_pem.cert, 'PEM')
+    local private_key = pkey_lib.new(certificate_pem.pkey, {format = 'PEM', type = 'pr'})
+    if not leaf or not private_key or not leaf:check_private_key(private_key) then
+        ngx_log(ngx_ERR, 'certificate private key does not match the leaf certificate')
+        certificate_cdata.cert, certificate_cdata.pkey = nil, nil
+        return certificate_cdata
+    end
+    certificate_cdata['cert'] = cert
+    certificate_cdata['pkey'] = pkey
     return certificate_cdata
 end
 
@@ -962,10 +975,11 @@ local function set_ssl_certificate(
     if certificate_pairing_data(certificate_cdata) then
         -- since we have a certs for this server, now we can continue...
         ngx_log(ngx_DEBUG, "can provide ssl for : ", server_name)
-        ssl_clear_certs()
-
-        -- scoping
-        local ok, err
+        local ok, err = ssl_clear_certs()
+        if not ok then
+            ngx_log(ngx_ERR, 'failed to clear ssl certificates : ', server_name, ' ', err)
+            return ngx.exit(ngx.ERROR)
+        end
 
         -- Set cert
         ok, err = ssl_set_cert(certificate_cdata['cert'])
@@ -974,7 +988,7 @@ local function set_ssl_certificate(
                 "failed to set ssl certificate : ", server_name,
                 " ", err
             )
-            return
+            return ngx.exit(ngx.ERROR)
         else
             ngx_log(ngx_DEBUG,
                 "set ssl certificate : ", server_name
@@ -988,7 +1002,7 @@ local function set_ssl_certificate(
                 "failed to set ssl private key : ", server_name,
                 " ", err
             )
-            return
+            return ngx.exit(ngx.ERROR)
         else
             ngx_log(ngx_DEBUG, "set ssl private key : ", server_name)
         end

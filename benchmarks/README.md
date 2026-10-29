@@ -7,8 +7,8 @@ operations, clean up the keys, and stop the server afterward. No existing
 Valkey/Redis instance is used.
 
 Requirements: Python 3, a `valkey-server` or `redis-server` executable, and the
-OpenResty `resty` CLI on `PATH`, with the package's `lua-resty-http` and
-`lua-resty-mlcache` dependencies installed. The high-resolution monotonic clock
+OpenResty `resty` CLI on `PATH`, with the package's `lua-resty-http`,
+`lua-resty-mlcache`, and `lua-resty-openssl` dependencies installed. The high-resolution monotonic clock
 supports Linux and macOS.
 
 From the repository root:
