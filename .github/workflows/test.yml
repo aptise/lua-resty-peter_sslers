@@ -113,6 +113,26 @@ jobs:
           opm get ledgetech/lua-resty-http thibaultcha/lua-resty-mlcache fffonion/lua-resty-openssl
           PERL_MM_USE_DEFAULT=1 cpan App::cpanminus
           cpanm -n Test::Nginx
+      - name: Build Redis with TLS enabled
+        if: matrix.backend == 'redis'
+        run: |
+          apk add --no-cache build-base openssl-dev curl
+          redis_version=$(redis-server --version | sed -n 's/.*v=\([^ ]*\).*/\1/p')
+          test -n "$redis_version"
+          build_dir=$(mktemp -d)
+          curl --fail --location --retry 3 -o "$build_dir/redis.tar.gz" "https://download.redis.io/releases/redis-$redis_version.tar.gz"
+          tar -xzf "$build_dir/redis.tar.gz" -C "$build_dir"
+          make -C "$build_dir/redis-$redis_version" -j2 BUILD_TLS=yes MALLOC=libc BUILD_WITH_MODULES=no redis-server
+          mkdir -p /opt/sslers-redis/bin
+          install -m755 "$build_dir/redis-$redis_version/src/redis-server" /opt/sslers-redis/bin/redis-server
+          echo /opt/sslers-redis/bin >> "$GITHUB_PATH"
+      - name: Enable Alpine Valkey TLS module
+        if: matrix.backend == 'valkey'
+        run: |
+          apk add --no-cache valkey-tls
+          tls_module=$(apk info -L valkey-tls | awk '/\.so$/ {print "/" $0}')
+          test -f "$tls_module"
+          echo "VALKEY_TLS_MODULE=$tls_module" >> "$GITHUB_ENV"
       - name: Test isolated password, TLS, and mTLS connections
         env:
           TEST_NGINX_NO_SHUFFLE: '1'

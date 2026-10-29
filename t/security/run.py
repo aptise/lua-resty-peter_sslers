@@ -23,6 +23,8 @@ import time
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--backend', choices=['valkey', 'redis'], default='valkey')
+    parser.add_argument('--tls-module', default=os.environ.get('VALKEY_TLS_MODULE'),
+                        help='Valkey TLS module path for modular builds (or VALKEY_TLS_MODULE)')
     parser.add_argument('--full-suite', action='store_true')
     parser.add_argument('--prove-include', action='append', default=[])
     parser.add_argument('--test', action='append', dest='tests', help='run selected test paths instead of the default suite')
@@ -35,6 +37,10 @@ def main():
     binary = shutil.which(args.backend + '-server')
     if not binary:
         parser.error(args.backend + '-server is required')
+    if args.tls_module:
+        if args.backend != 'valkey' or not Path(args.tls_module).is_file():
+            parser.error('--tls-module requires Valkey and an existing module file')
+        args.tls_module = str(Path(args.tls_module).resolve())
     root = Path(__file__).resolve().parents[2]
     os.chdir(root)
     with tempfile.TemporaryDirectory(prefix='sslers-security-') as temporary, contextlib.ExitStack() as stack:
@@ -42,7 +48,9 @@ def main():
         def command(*parts):
             subprocess.run(parts, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         command('openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '2',
-                '-subj', '/CN=sslers-test-ca', '-keyout', str(folder/'ca.key'), '-out', str(folder/'ca.crt'))
+                '-subj', '/CN=sslers-test-ca', '-addext', 'basicConstraints=critical,CA:TRUE',
+                '-addext', 'keyUsage=critical,keyCertSign,cRLSign',
+                '-keyout', str(folder/'ca.key'), '-out', str(folder/'ca.crt'))
         for name, purpose in [('server', 'serverAuth'), ('client', 'clientAuth')]:
             command('openssl', 'req', '-newkey', 'rsa:2048', '-nodes', '-subj', '/CN=backend.test',
                     '-keyout', str(folder/(name+'.key')), '-out', str(folder/(name+'.csr')))
@@ -122,6 +130,8 @@ def main():
             if name in ('auth', 'tls'):
                 config += ['requirepass test-password', 'user audit on >test-password ~* +@all']
             if name in ('tls', 'mtls'):
+                if args.tls_module:
+                    config += ['loadmodule ' + json.dumps(args.tls_module)]
                 config += ['tls-port '+str(ports[name]), 'tls-cert-file '+str(folder/'server.crt'),
                            'tls-key-file '+str(folder/'server.key'), 'tls-ca-cert-file '+str(folder/'ca.crt'),
                            'tls-auth-clients '+('yes' if name == 'mtls' else 'no')]
@@ -134,7 +144,11 @@ def main():
             while True:
                 if process.poll() is not None:
                     log.seek(0)
-                    raise RuntimeError(log.read())
+                    details = log.read()
+                    if 'Failed finding TLS support' in details:
+                        details = ('Backend TLS support is unavailable. For modular Alpine Valkey, '
+                                   'install valkey-tls and set VALKEY_TLS_MODULE to its .so path.\n' + details)
+                    raise RuntimeError(details)
                 try:
                     with socket.create_connection(('127.0.0.1', ports[name]), timeout=.1):
                         break
@@ -142,6 +156,20 @@ def main():
                     if time.monotonic() > deadline:
                         raise RuntimeError('backend startup timeout')
                     time.sleep(.02)
+        # Verify transport and protocol, not just that a TCP port is listening.
+        for name in ('tls', 'mtls'):
+            client_context = ssl.create_default_context(cafile=str(folder/'ca.crt'))
+            if name == 'mtls':
+                client_context.load_cert_chain(str(folder/'client.crt'), str(folder/'client.key'))
+            with socket.create_connection(('127.0.0.1', ports[name]), timeout=2) as raw:
+                with client_context.wrap_socket(raw, server_hostname='backend.test') as secure:
+                    request = b'AUTH test-password\r\n' if name == 'tls' else b'PING\r\n'
+                    expected = b'+OK\r\n' if name == 'tls' else b'+PONG\r\n'
+                    secure.sendall(request)
+                    with secure.makefile('rb') as response:
+                        if response.readline(1024) != expected:
+                            raise RuntimeError(args.backend + ' ' + name + ' protocol verification failed')
+        print(args.backend + ' verified TLS and mTLS fixture handshakes passed', flush=True)
         api_outage = {'failed': True, 'calls': 0}
         availability_lock = threading.Lock()
         certificate = (root/'t/cert/test.example.com.crt').read_text()

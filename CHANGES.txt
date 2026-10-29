@@ -47,6 +47,8 @@
 	- refresh CI Lua/LuaRocks, checkout/cache actions, and OpenResty images; pin LuaRocks 3.13.0 to avoid LuaJIT manifest limits
 	- replace the HTTP CPAN bootstrap and invalidate obsolete dependency caches
 	- fix CI LuaRocks bootstrap by building the release tarball against OpenResty LuaJIT instead of installing a source rock
+	- load Alpine Valkey TLS module in secure CI fixtures; support --tls-module / VALKEY_TLS_MODULE for modular builds
+	- explicitly build CI Redis with TLS enabled and verify TLS/mTLS fixture handshakes for both backends before tests
 
 0.5.0
 	2021.03.16

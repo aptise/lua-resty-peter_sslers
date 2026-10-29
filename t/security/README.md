@@ -104,3 +104,15 @@ the parallel-fixture check for both backends.
 The coverage job builds LuaRocks 3.13.0 from its release tarball using the
 OpenResty image's LuaJIT prefix and headers, matching the upstream alpine-fat
 build. It does not invoke the bundled LuaRocks to bootstrap its replacement.
+
+Alpine packages Valkey TLS separately as `valkey-tls`. CI installs that package
+and sets `VALKEY_TLS_MODULE` to its shared library. For a modular local build,
+pass `--tls-module /path/to/module.so` (or set that environment variable). The
+runner loads it only for TLS/mTLS fixtures; builds with built-in TLS need no
+module option. Redis fixtures do not use this option.
+
+The Redis CI job rebuilds the Alpine-selected Redis release with `BUILD_TLS=yes`
+and OpenSSL development libraries, placing that binary first on PATH. Before
+running tests, the runner verifies the server certificate on both TLS fixtures,
+supplies a client certificate for mTLS, and checks an authenticated AUTH or PING
+response. Missing TLS support fails fixture setup for either backend.
