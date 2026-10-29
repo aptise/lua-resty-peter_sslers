@@ -46,9 +46,11 @@ and quoted. An explicit `TEST_NGINX_SERVROOT` takes precedence and should be a
 short path without whitespace.
 
 The prime-1, prime-2, and command-error integration cases require Valkey or Redis
-and write fixture data in database 9. Use a dedicated test instance; `REDIS_HOST` and `REDIS_PORT`
-override the default `127.0.0.1:6379`. Using different HTTP ports does not isolate
-Redis fixtures between concurrent runs.
+and write fixture data in database 9. Use a dedicated test instance; `REDIS_HOST`
+and `REDIS_PORT` override the default `127.0.0.1:6379`. Datastore keys include a
+random run identity and worker PID and are removed after use. Concurrent runs
+also need distinct HTTP ports and runtime paths; the isolated runner can verify
+parallel certificate fixtures against one datastore.
 
 The cases in `t/audit/01_regressions.t` use injected dependencies from
 `t/audit/regressions.lua` to test backend errors and cache behavior without a

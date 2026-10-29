@@ -9,9 +9,7 @@ local ssl = require "ngx.ssl"
 local x509 = require "resty.openssl.x509"
 local pkey_lib = require "resty.openssl.pkey"
 
--- we may not need resty.http,
--- but including it here is better for memory if we need it
--- this is the pintsized library
+-- Load the Python backend transport once per worker.
 local http = require "resty.http"
 
 -- ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~
@@ -51,11 +49,11 @@ local autocert_sequence = 0
 
 -- cert_cache_duration is for the shared dict;
 -- misses fall back onto Redis/PeterSslers
--- cert_cache can be emptied via the api
+-- Expiration endpoints invalidate shared entries and broadcast to worker L1s.
 local cert_cache_duration = 600
 -- lru_cache_duration is for the unshared worker dict;
 -- misses fallback on cert_cache/Redis/PeterSslers
--- lru must timeout
+-- A positive worker TTL caps parsed-pair retention.
 local lru_cache_duration = 60
 local lru_maxitems = 200  -- allow up to 200 items in the cache
 local allowed_redis_strategy = {1, 2, }
@@ -63,7 +61,7 @@ local backend_error_codes = {[401] = true, [403] = true, [429] = true}
 local redis_server = '127.0.0.1'
 local redis_port = '6379'
 local redis_db_number = 9
-local _VERSION = '0.5.0'
+local _VERSION = '1.0.0'
 local redis_options = {}
 local api_options = {}
 local redis_revision, api_revision = 0, 0
@@ -72,6 +70,8 @@ local api_endpoints = {}
 local api_endpoint_count = 0
 
 
+-- Log module initialization and return true. No cache allocation occurs here.
+-- Call from init_by_lua_block; initialize_worker performs worker-local setup.
 local function initialize()
     ngx_log(ngx_NOTICE, "peter_sslers.initialize")
     -- we currently use `initialize_worker`, but this may be used in the future
@@ -79,6 +79,15 @@ local function initialize()
 end
 
 
+-- Create this worker's mlcache instance, capped L1 LRU, and shared IPC support.
+-- Requires cert_cache and cert_cache_ipc shared dictionaries; raises on setup errors.
+-- @param _cert_cache_duration Shared positive/negative TTL in seconds; initially 600.
+-- @param _lru_cache_duration Worker TTL cap in seconds; initially 60; 0 disables the cap.
+-- @param _lru_maxitems L1 entry limit (complete pairs or negative entries); initially 200.
+-- Nil/false arguments retain current values. Shared TTL 0 means no L2 expiry.
+-- L1 uses the shorter positive TTL/cap; a zero L2 TTL uses the worker cap, if enabled.
+-- @return true on successful setup. Configure once per worker before lookups.
+-- Version added: 1.0.0 (mlcache caches and IPC invalidation; function predates 1.0.0).
 local function initialize_worker(
     _cert_cache_duration, _lru_cache_duration, _lru_maxitems
     )
@@ -134,8 +143,9 @@ end
 -- START: these are just some helper functions
 
 
+-- Return an empty pair table with no cert or pkey fields. i.e. a new empty TypedDict.
+-- Used for absence and unsuccessful low-level queries; it is not a negative-cache marker.
 local function certificate_pairing()
-    -- simple container
     local pairing = {}
           pairing["cert"] = nil
           pairing["pkey"] = nil
@@ -143,8 +153,9 @@ local function certificate_pairing()
 end
 
 
--- API diagnostic fields are untrusted JSON values. Do not pass tables or
--- JSON-null userdata directly to ngx.log, or serialize their nested contents.
+-- Return a scalar-safe log value for an untrusted API diagnostic field.
+-- JSON null becomes "null"; nested/non-scalar values become type labels.
+-- Version added: 1.0.0.
 local function api_log_value(value)
     if value == cjson_null then return 'null' end
     local kind = type(value)
@@ -154,9 +165,12 @@ local function api_log_value(value)
 end
 
 
+-- Decode an HTTP API response into a PEM pair, respecting ordered cert_preferences.
+-- No PEM/key-match validation occurs here. Nil response and malformed/error payloads
+-- are transient; 404 and explicit all-null preferences are cacheable absence.
+-- @return Pair with transient and backend_failure flags for the main fetch path.
+-- Version added: 1.0.0 (validated response schema and failure classification; function predates 1.0.0).
 local function api_response_to_cert(server_name, response, cert_preferences)
-    -- response: api response via `httpc:request_uri(data_uri`
-    -- returns: `certificate_pem`
     local cert, pkey
     local certificate_pem = certificate_pairing()
     -- A 200 is authoritative only after validating its certificate fields.
@@ -249,8 +263,9 @@ local function api_response_to_cert(server_name, response, cert_preferences)
 end
 
 
+-- Return true when cert is non-nil and both cert and pkey fields are non-nil.
+-- This checks field presence only, not types, markers, PEM syntax, or key matching.
 local function certificate_pairing_data(cert)
-    -- returns true or false based on the validity of a certificate_pairing
     if cert ~= nil and cert['cert'] ~= nil and cert['pkey'] ~= nil then
         return true
     else
@@ -259,6 +274,8 @@ local function certificate_pairing_data(cert)
 end
 
 
+-- Return true if either field of the supplied pair is the legacy "x" marker.
+-- The caller must supply a non-nil pair table.
 local function has_failmarker(cert)
     -- returns true if failmarker is present
     if cert['cert'] == 'x' or cert['pkey'] == 'x' then
@@ -268,6 +285,8 @@ local function has_failmarker(cert)
 end
 
 
+-- Return true if either field of the supplied pair is the legacy "ac" marker.
+-- The caller must supply a non-nil pair table.
 local function has_autocertmarker(cert)
     -- returns true if autocertmarker is present
     if cert['cert'] == 'ac' or cert['pkey'] == 'ac' then
@@ -277,7 +296,10 @@ local function has_autocertmarker(cert)
 end
 
 
-local function certificate_pairing_validate(cert)
+-- Return true for a complete pair without legacy "x" or "ac" markers.
+-- previously named `certificate_pairing_validate`
+-- Version added: 1.0.0.
+local function certificate_pairing_is_candidate(cert)
     if certificate_pairing_data(cert) then
         if has_failmarker(cert) then
             return false
@@ -292,6 +314,12 @@ local function certificate_pairing_validate(cert)
 end
 
 
+-- Parse a PEM chain/private key and verify that the key matches the first certificate.
+-- @param certificate_pem Table with cert (leaf-first PEM chain) and pkey (private PEM).
+-- @param certificate_cdata Caller-supplied output table; returned by this function.
+-- On success set its cert/pkey to ngx.ssl cdata; on failure log and clear both fields.
+-- Does not validate hostname, dates, or trust. No caching or TLS installation occurs.
+-- Version added: 1.0.0 (leaf/private-key matching and cleared invalid output; function predates 1.0.0).
 certificate_pairing_pem_to_cdata = function(certificate_pem, certificate_cdata)
     local cert, cert_err = ssl_parse_pem_cert(certificate_pem['cert'])
     local pkey, key_err = ssl_parse_pem_priv_key(certificate_pem['pkey'])
@@ -315,6 +343,9 @@ certificate_pairing_pem_to_cdata = function(certificate_pem, certificate_cdata)
 end
 
 
+-- Convert an L2 string (certificate PEM, NUL, private-key PEM) into a validated pair.
+-- @return Worker-local cdata pair, or nil and an error for malformed/mismatched data.
+-- Version added: 1.0.0.
 deserialize_certificate = function(packed)
     local separator = packed:find(string.char(0), 1, true)
     if not separator then return nil, 'invalid cached certificate pair' end
@@ -326,14 +357,12 @@ deserialize_certificate = function(packed)
 end
 
 
--- function certificate_pairing_pem_to_der(certificate_pem, certificate_der)
---  certificate_der['cert'] = ssl_cert_pem_to_der(certificate_pem['cert'])
---  certificate_der['pkey'] = ssl_priv_key_pem_to_der(certificate_pem['pkey'])
---  return certificate_der
--- end
 
 
 
+-- Write status metadata "ac" at server_name .. ":c" with the shared TTL.
+-- This is not the provisioning lock. Return the shared-dictionary set results.
+-- Version added: 1.0.0 (status-only pending metadata; function predates 1.0.0).
 local function set_autocertmarker_sharedcache(server_name)
     -- The mlcache callback already established a cache miss. This flag is only
     -- status metadata; the owned lease is the provisioning coordination state.
@@ -341,6 +370,9 @@ local function set_autocertmarker_sharedcache(server_name)
 end
 
 
+-- Remove pending status metadata only if it is still "ac"; also clean legacy :k.
+-- Does not release the autocert lock or remove a completed certificate.
+-- Version added: 1.0.0 (status-only marker cleanup; function predates 1.0.0).
 local function clear_autocertmarker_sharedcache(server_name)
     if cert_cache:get(server_name .. ':c') == 'ac' then
         cert_cache:delete(server_name .. ':c')
@@ -349,6 +381,9 @@ local function clear_autocertmarker_sharedcache(server_name)
 end
 
 
+-- Clear pending metadata and delete lock_key only when lock_token still owns it.
+-- Stale attempts leave the replacement owner's lock and status untouched.
+-- Version added: 1.0.0.
 local function release_autocert_lock(server_name, lock_key, token)
     if cert_cache:get(lock_key) ~= token then return end
     clear_autocertmarker_sharedcache(server_name)
@@ -356,12 +391,21 @@ local function release_autocert_lock(server_name, lock_key, token)
 end
 
 
+-- Insert a complete cdata pair directly into this worker's L1 with its worker TTL.
+-- Advanced/test helper: caller must supply a canonical name and already validated pair.
+-- Returns no value; performs no validation, shared write, or IPC broadcast.
+-- Version added: 1.0.0 (one complete pair per L1 entry; function predates 1.0.0).
 local function set_cert_lrucache(server_name, certificate_cdata)
     ngx_log(ngx_DEBUG, "caching cert & key cdata into the worker : ", server_name)
     cert_lrucache:set(server_name, certificate_cdata, lru_cache_duration)
 end
 
 
+-- Store a PEM pair through mlcache and broadcast its update to other workers.
+-- Caller supplies a canonical server_name and string cert/pkey fields. Serialization
+-- validates PEM/key matching; failure deletes the cached pair and status metadata.
+-- @return true on success, or nil and an error. Status-index failure only logs.
+-- Version added: 1.0.0 (mlcache storage, validation, and IPC; function predates 1.0.0).
 local function set_cert_sharedcache(server_name, certificate_pem)
     ngx_log(ngx_DEBUG, "caching PEM cert & key into the shared cache : ", server_name)
     local ok, err = certificate_cache:set(server_name, nil,
@@ -379,9 +423,10 @@ local function set_cert_sharedcache(server_name, certificate_pem)
 end
 
 
--- Short backend-wide cooldowns are independent of domain certificate/absence
--- entries. Stable opaque identities share cooldowns across workers without
--- putting credentials or client-key PEM into shared-dictionary keys.
+-- Hash connection settings into a stable cross-worker cooldown identity.
+-- Call before client PEM is replaced by cdata or Basic credentials are encoded.
+-- Credentials do not appear verbatim in shared keys.
+-- Version added: 1.0.0.
 local function retry_identity(options)
     local parts = {}
     for _, name in ipairs({'username', 'password', 'authorization', 'ssl', 'ssl_verify',
@@ -397,6 +442,9 @@ local function retry_identity(options)
 end
 
 
+-- Return a backend cooldown key and delay in seconds for endpoint/options.
+-- Defaults to one second; disabled backoff returns nil, 0. Lazily caches identity.
+-- Version added: 1.0.0.
 local function retry_state(kind, endpoint, options)
     local delay = options.retry_backoff
     if delay == nil then delay = 1 end
@@ -406,6 +454,9 @@ local function retry_state(kind, endpoint, options)
 end
 
 
+-- Best-effort safe_add of a cooldown marker; a nil key disables the operation.
+-- Does not evict usable entries or extend an existing marker. Logs storage errors.
+-- Version added: 1.0.0.
 local function retry_failed(key, delay)
     if not key then return end
     -- safe_add neither evicts usable certificates nor extends an existing
@@ -415,13 +466,18 @@ local function retry_failed(key, delay)
 end
 
 
+-- Delete the supplied cooldown key after a healthy lookup; a nil key is a no-op.
+-- Version added: 1.0.0.
 local function retry_succeeded(key)
     if key then cert_cache:delete(key) end
 end
 
 
--- Configuration is copied and certificates are parsed once per configuration,
--- never during individual handshakes. Passwords never appear in pool names.
+-- Validate/copy a complete options table for a datastore or API connection.
+-- Parse client PEM once, hash cooldown identity, and encode API Basic authorization.
+-- Unknown/invalid settings raise; API HTTPS compatibility is checked at request time.
+-- @return Internal options table; see docs/connectivity.md for the public fields.
+-- Version added: 1.0.0.
 local function connection_options(options, is_redis)
     assert(type(options) == 'table', 'connection options must be a table')
     local result = {}
@@ -469,6 +525,15 @@ local function connection_options(options, is_redis)
 end
 
 
+-- Set the worker's datastore endpoint/database and optional complete connection options.
+-- Also exported as valkey_update_defaults. Call during init_worker_by_lua_block.
+-- @param _redis_server Datastore hostname/IP (initial default 127.0.0.1).
+-- @param _redis_port Datastore port (initial default 6379).
+-- @param _redis_db_number Database index (initial default 9).
+-- @param options Optional table; nil preserves options, {} resets to defaults.
+-- Options errors raise before updating the endpoint; returns no value. Does not flush
+-- certificate caches. A supplied options table advances the connection-pool revision.
+-- Version added: 1.0.0 (connection options and valkey_update_defaults alias; function predates 1.0.0).
 local function redis_update_defaults(_redis_server, _redis_port, _redis_db_number, options)
     -- override system defaults
     local configured = options and connection_options(options, true)
@@ -482,17 +547,23 @@ local function redis_update_defaults(_redis_server, _redis_port, _redis_db_numbe
 end
 
 
+-- Replace this worker's API connection options and advance its pool revision.
+-- @param options Complete table; {} restores defaults, including one-second backoff.
+-- Invalid configuration raises; returns no value. Does not flush certificate caches.
+-- Call during worker initialization; see docs/connectivity.md for supported fields.
+-- Version added: 1.0.0.
 local function api_update_defaults(options)
     api_options = connection_options(options, false)
     api_revision = api_revision + 1
 end
 
 
+-- Connect to the configured Valkey/Redis endpoint with a configuration-specific pool.
+-- Apply TLS/client identity before connecting; authenticate/select DB only on new sockets.
+-- @return Connected resty.redis client, or nil and an error. No retry cooldown is enforced.
+-- The caller must close failed queries or return a usable connection via redis_keepalive.
+-- Version added: 1.0.0 (secure connections and configuration-isolated pooling; function predates 1.0.0).
 local function get_redcon()
-    -- this sets up our redis connection
-    -- it checks to see if it is a pooled connection (ie, reused),
-    -- and changes to db9 if it is new
-    -- Setup Redis connection
     local redcon = redis:new()
     if redis_options.timeout then redcon:set_timeout(redis_options.timeout) end
     if redis_options.ssl then
@@ -528,8 +599,7 @@ local function get_redcon()
         ngx_log(ngx_ERR, "Redis: failed to connect to redis: ", err)
         return nil, err
     end
-    -- Change the redis DB to the port
-    -- We only have to do this on new connections
+    -- Authenticate and select the configured database only on new connections.
     local times, err = redcon:get_reused_times()
     if err or type(times) ~= 'number' or times < 0 then
         err = err or 'invalid connection reuse count'
@@ -562,11 +632,10 @@ local function get_redcon()
 end
 
 
+-- Return a usable datastore client to its pool (10-second idle timeout, size 100).
+-- Log failure and return no value. The caller must not use the client afterward.
+-- This does not unconditionally close the underlying socket.
 local function redis_keepalive(redcon)
-    -- put `redcode` into the connection pool
-    -- * pool size = 100
-    -- * idle time = 10s
-    -- note: this will close the connection
     local ok, err = redcon:set_keepalive(10000, 100)
     if not ok then
         ngx_log(ngx_ERR, "Redis: failed to set keepalive: ", err)
@@ -575,8 +644,10 @@ local function redis_keepalive(redcon)
 end
 
 
--- HMGET returns an array for both hits and misses, false on a Redis error,
--- and nil on a transport error. Only an all-null array is a clean miss.
+-- HMGET the requested domain hash fields in order; all-null fields mean a clean miss.
+-- @return Array on success; nil on absence; nil, error, backend_failure on failure.
+-- backend_failure is true for a nil/transport reply; record/command errors are domain-local.
+-- Version added: 1.0.0.
 local function redis_domain_data(redcon, key_domain, ...)
     local data, err = redcon:hmget(key_domain, ...)
     if err or type(data) ~= 'table' then
@@ -601,6 +672,10 @@ local function redis_domain_data(redcon, key_domain, ...)
 end
 
 
+-- Pipeline GETs for three referenced PEM keys, preserving per-command errors.
+-- @return Ordered strings, or nil, error, backend_failure; missing parts are errors.
+-- A nil pipeline reply marks backend failure; individual replies are domain-local.
+-- Version added: 1.0.0.
 local function redis_certificate_parts(redcon, keys)
     -- Keep GET permissions and individual command errors, but send all three
     -- reads in one round trip after discovering their IDs with HMGET.
@@ -628,8 +703,13 @@ local function redis_certificate_parts(redcon, keys)
 end
 
 
+-- Read d1:<name> fields c/p/i, then pipeline p:<p>, c:<c>, and i:<i> GETs.
+-- @param redcon Connected datastore client; caller manages its lifetime.
+-- @param _server_name Canonical domain (not normalized by this helper).
+-- @return PEM pair (leaf plus newline plus chain), nil on clean miss, or
+-- nil, error, backend_failure on failure. No PEM validation, caching, or backoff.
+-- Version added: 1.0.0 (HMGET, pipelined GETs, and explicit failure classification; function predates 1.0.0).
 local function prime_1__query_redis(redcon, _server_name)
-    -- Return a pair, a clean miss (nil), or a retryable failure (nil, err).
     ngx_log(ngx_DEBUG, "Redis: prime_1__query_redis : ", _server_name)
     local domain_data, err, backend_failure = redis_domain_data(redcon, 'd1:' .. _server_name, 'c', 'p', 'i')
     if not domain_data then return nil, err, backend_failure end
@@ -647,8 +727,13 @@ local function prime_1__query_redis(redcon, _server_name)
 end
 
 
+-- Read d2:<name> fields p/f atomically as private-key/fullchain PEM.
+-- @param redcon Connected datastore client; caller manages its lifetime.
+-- @param _server_name Canonical domain (not normalized by this helper).
+-- @return PEM pair, nil on clean miss, or nil, error, backend_failure on failure.
+-- No PEM validation, caching, or backoff is performed.
+-- Version added: 1.0.0 (HMGET and explicit failure classification; function predates 1.0.0).
 local function prime_2__query_redis(redcon, _server_name)
-    -- Return a pair, a clean miss (nil), or a retryable failure (nil, err).
     ngx_log(ngx_DEBUG, "Redis: prime_2__query_redis : ", _server_name)
     local domain_data, err, backend_failure = redis_domain_data(redcon, 'd2:' .. _server_name, 'p', 'f')
     if not domain_data then return nil, err, backend_failure end
@@ -660,8 +745,9 @@ local function prime_2__query_redis(redcon, _server_name)
 end
 
 
--- SNI is client input. Accept DNS names (including IDNA ASCII labels),
--- and canonicalize before using a name in a cache key or backend request.
+-- Return a lowercase ASCII DNS name after removing one final dot, or nil.
+-- Reject invalid labels, non-ASCII input, and excessive length; callers encode IDNA.
+-- Version added: 1.0.0.
 local function canonical_server_name(name)
     if type(name) ~= 'string' then return nil end
     name = name:lower():gsub('%.$', '')
@@ -676,6 +762,10 @@ local function canonical_server_name(name)
 end
 
 
+-- Apply configured auth/TLS/timeout/pool settings to params and send request_uri.
+-- Mutates params; requires HTTPS and compatible client APIs for client certificates.
+-- @return HTTP response, or nil and an error. Does not impose retry cooldowns.
+-- Version added: 1.0.0.
 local function api_request(fallback_server, uri, params)
     local options = api_options
     if options.ssl_client_cert and not uri:match('^https://') then
@@ -709,14 +799,16 @@ local function api_request(fallback_server, uri, params)
 end
 
 
+-- GET fallback_server/domain/<name>/config.json?openresty=1 with API options.
+-- @param fallback_server HTTP(S) admin root, with no trailing slash.
+-- @param server_name Domain to normalize/validate; invalid input makes no request.
+-- @param cert_preferences Optional ordered response-field names; multi precedes single by default.
+-- @return PEM pair with failure metadata, or empty pair; no caching/PEM validation/backoff.
+-- Uses a cosocket-capable phase. Unexpected transport exceptions propagate to the caller.
+-- Version added: 1.0.0 (canonical SNI, secure options, and transient metadata; function predates 1.0.0).
 local function query_api_upstream(
     fallback_server, server_name, cert_preferences
 )
-    -- fallback_server : http(s) server root for peter_sslers installation
-    -- server_name : active `ssl.server_name`
-    -- cert_preferences : array of api keys to prefer
-    --
-    -- returns: certificate_pem - a pairing that may be valid or invalid
     ngx_log(ngx_DEBUG, "query_api_upstream : ", server_name)
 
     server_name = canonical_server_name(server_name)
@@ -735,14 +827,16 @@ local function query_api_upstream(
 end
 
 
+-- POST domain_name=<canonical name> to fallback_server/api/domain/autocert.json?openresty=1.
+-- @param fallback_server HTTP(S) admin root, with no trailing slash.
+-- @param server_name Domain to normalize/validate; invalid input makes no request.
+-- @param cert_preferences Optional ordered response-field names; multi precedes single by default.
+-- @return PEM pair with failure metadata, or empty pair; no caching/PEM validation/backoff.
+-- This direct helper neither acquires a provisioning lease nor fences stale responses.
+-- Version added: 1.0.0 (form encoding, canonical SNI, and secure options; function predates 1.0.0).
 local function query_api_autocert(
     fallback_server, server_name, cert_preferences
 )
-    -- fallback_server : http(s) server root for peter_sslers installation
-    -- server_name : active `ssl.server_name`
-    -- cert_preferences : array of api keys to prefer
-    --
-    -- returns: certificate_pem - a pairing that may be valid or invalid
     ngx_log(ngx_DEBUG, "query_api_autocert : ", server_name)
 
     server_name = canonical_server_name(server_name)
@@ -772,15 +866,23 @@ end
 -- START MAIN LOGIC
 
 
+-- Validate a present PEM pair and return worker-local cdata, or nil and an error.
+-- A missing/incomplete pair returns nil without error; legacy markers are rejected.
 local function parse_backend_candidate(pem)
     if not certificate_pairing_data(pem) then return nil end
-    if not certificate_pairing_validate(pem) then return nil, 'invalid backend certificate marker' end
+    if not certificate_pairing_is_candidate(pem) then return nil, 'invalid backend certificate marker' end
     local parsed = certificate_pairing_pem_to_cdata(pem, {})
     if not certificate_pairing_data(parsed) then return nil, 'invalid backend PEM' end
     return parsed
 end
 
 
+-- mlcache L3 callback: query datastore then API, observing scoped retry cooldowns.
+-- Own/fence an autocert lease when provisioning; retain ownership through publication.
+-- Populate context with validated cdata/packed PEM, or absence/transient/skip state.
+-- @return Packed PEM for success, nil for authoritative absence, nil/error for a
+-- transient failure, or nil, nil, -1 to skip storage for a stale/busy/invalid attempt.
+-- Version added: 1.0.0.
 local function fetch_certificate(
     context, server_name, redis_strategy, fallback_server, enable_autocert, cert_preferences
 )
@@ -893,21 +995,18 @@ local function fetch_certificate(
 end
 
 
+-- Resolve SNI through L1/L2/datastore/API and install a validated pair during TLS SNI.
+-- @param redis_strategy nil disables datastore; 1 or 2 selects the prime layout.
+-- @param fallback_server HTTP(S) admin root without trailing slash; nil disables API.
+-- @param enable_autocert Any non-nil value (including false) selects API provisioning POST.
+-- @param cert_preferences Ordered API fields; default multi then single (see docs/api.md).
+-- Requires initialize_worker first. Poll IPC before cache access; use negative caching
+-- only for absence. Missing/invalid SNI, lookup failure, or busy lease leaves defaults.
+-- Clearing/installation failure logs and exits ngx.ERROR. Normally returns no value.
+-- Version added: 1.0.0 (mlcache, retry cooldowns, lease fencing, and checked installation; function predates 1.0.0).
 local function set_ssl_certificate(
     redis_strategy, fallback_server, enable_autocert, cert_preferences
 )
-    -- main functionality
-    --   queries datastores for certificate data, loads into nginx/openresy
-    -- redis_strategy : nil = Do not use Redis;
-    --                  1,2 = peter_sslers redis-prime versions
-    -- fallback_server : http(s) server root for peter_sslers installation
-    -- enable_autocert? : nil = NO; not-nil = YES
-    -- cert_preferences : an array to attempt searching in payload
-    --                    should be {"certificate_signed__latest_single",
-    --                               "certificate_signed__latest_multi"}
-    --
-    -- Parsed objects remain worker-local with the configured L1 TTL cap.
-    -- mlcache IPC applies updates/expiration before the next certificate lookup.
 
     local server_name = ssl_server_name()
     ngx_log(ngx_DEBUG, "set_ssl_certificate : ", server_name)
@@ -1013,6 +1112,12 @@ local function set_ssl_certificate(
 end
 
 
+-- Write a JSON status response in a content phase, with x-peter-sslers version header.
+-- Scan at most 1024 shared keys and classify :c domain metadata against mlcache entries.
+-- Report valid/invalid/autocert names and TTL/LRU configuration; never include PEM.
+-- Does not inspect L1, validate certificates, or give a complete inventory under pressure.
+-- Requires initialize_worker; returns no value.
+-- Version added: 1.0.0 (mlcache status metadata; function predates 1.0.0).
 local function status_ssl_certs()
     ngx_log(ngx_NOTICE, "status_ssl_certs")
     ngx_header.content_type = 'application/json'
@@ -1021,15 +1126,14 @@ local function status_ssl_certs()
     local ks_valid = {}
     local ks_invalid = {}
     local ks_autocert = {}
-    -- max count is 1024, but specify it anyways
+    -- Scan at most 1024 dictionary keys, including internal cache/lock keys.
     local all_keys = cert_cache:get_keys(1024)
 
     -- `all_keys` is a table of (idx, key)
     for idx, k in pairs(all_keys) do
         local _domain = k:sub(0,-3)
         local _ext = k:sub(-2,-1)
-        -- each domain has a duplicate on "{DOMAIN}:k" and "{DOMAIN}:v"
-        -- we only need one
+        -- Only :c status metadata identifies domains; PEM and internal keys are skipped.
         if _ext == ':c' then
             local v = cert_cache:get(k)
             -- ngx_log(ngx_DEBUG, "idx ", idx)
@@ -1088,6 +1192,14 @@ local function status_ssl_certs()
 end
 
 
+-- Invalidate cached certificates in a content phase and write a JSON response.
+-- Route the full request_uri against ngx.var.location plus /all or /domain/<name>.
+-- /all purges cert_cache (including locks/backoff); /domain removes that pair and
+-- legacy status entries but retains its provisioning lock and retry cooldowns.
+-- Broadcast L1 invalidation via IPC; workers consume it on their next lookup.
+-- Return HTTP 200 for success, 503 on invalidation failure, or 404 for unknown routes.
+-- Domain matching is case-sensitive with no canonicalization; query strings do not match.
+-- Version added: 1.0.0 (mlcache deletion/purge and cross-worker invalidation; function predates 1.0.0).
 local function expire_ssl_certs()
     ngx_log(ngx_NOTICE, "expire_ssl_certs")
     ngx_header.content_type = 'application/json'

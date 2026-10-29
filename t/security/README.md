@@ -1,8 +1,8 @@
 # Secure backend tests
 
 Run from the repository root. Requirements are OpenResty, `lua-resty-http`,
-`lua-resty-mlcache`, `lua-resty-openssl`, Test::Nginx, Python 3, the `openssl` command, and a TLS-enabled `valkey-server` or
-`redis-server` executable on `PATH`. Use a modern OpenResty runtime supporting
+`lua-resty-mlcache`, `lua-resty-openssl`, Test::Nginx, Python 3, the `openssl`
+command, and a TLS-enabled `valkey-server` or `redis-server` executable on `PATH`. Use a modern OpenResty runtime supporting
 cosocket client certificates and `lua-resty-http >= 0.17.1` for the mTLS cases.
 
 ## Run the complete suite

@@ -1,4 +1,4 @@
-Unreleased
+1.0.0 (release preparation)
 	- fixed per-domain shared-cache expiration
 	- validate backend PEM before caching; allow API fallback after invalid Redis PEM
 	- avoid negative caching for transport errors and non-200/non-404 API responses
@@ -41,6 +41,9 @@ Unreleased
 	- check clear_certs errors and explicitly abort TLS handshakes on clearing or installation failures
 	- add real key-match regressions, worker-cache reuse checks, and verified TLS installation-failure coverage
 	- verified 824 assertions against each of Valkey and Redis, including parallel fixture and cleanup checks
+	- set package version to 1.0.0 and audit README, API reference, and inline function documentation
+	- clarify semantic versioning, paired Python compatibility, mlcache capacity/invalidation, and upgrade behavior
+	- renamed `certificate_pairing_validate` to `certificate_pairing_is_candidate`
 
 0.5.0
 	2021.03.16

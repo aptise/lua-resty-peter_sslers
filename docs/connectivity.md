@@ -6,8 +6,9 @@ certificate layouts; there is no separate Valkey strategy or migration format.
 The public `redis_strategy` argument still selects layout `1` or `2`, and `nil`
 disables datastore lookups.
 
-These configuration APIs are currently unreleased; use a checkout or release
-that contains them.
+The connection options, `valkey_update_defaults` alias, and `api_update_defaults`
+were added in 1.0.0. See the [Lua API reference](api.md) for phases and return
+values.
 
 ## Configuration entry points
 
@@ -79,9 +80,9 @@ apply to API autocert requests.
 
 Datastore connection, authentication, and transport failures cool down the
 configured datastore. API transport failures, request exceptions, and HTTP
-401, 403, 429, or 5xx responses cool down the configured API. Invalid PEM,
-malformed domain payloads, and datastore record/command errors cool down only
-the affected domain on that backend. Other unsuccessful API statuses except
+401, 403, 429, or numeric statuses >= 500 cool down the configured API. Invalid
+PEM, mismatched certificate/key pairs, malformed domain payloads, and datastore
+record/command errors cool down only the affected domain on that backend. Other unsuccessful API statuses except
 404 also receive a domain cooldown. Clean datastore misses, HTTP 404, and
 explicit API certificate absence retain the existing absence-caching behavior
 and do not start a cooldown.
@@ -218,9 +219,9 @@ revision. Reconfiguring credentials or TLS options therefore avoids reusing
 connections authenticated with the previous identity. Existing idle connections
 remain subject to their keepalive expiry.
 
-Changing connection settings does not flush certificate caches. Shared-cache
-expiration and worker LRU TTLs still determine when cached certificate material
-is refreshed.
+Changing connection settings does not flush certificate caches. Entries remain
+until expiry or explicit invalidation; administration expiration broadcasts L1
+invalidation through mlcache IPC.
 
 ## Verification
 
