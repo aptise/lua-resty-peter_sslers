@@ -23,11 +23,16 @@ return function(scenario)
     local old_key = read('t/cert/example.com.key')
     local new_cert = read('t/cert/test.example.com.crt')
     local new_key = read('t/cert/test.example.com.key')
-    local pair_key = 'test.example.com:pair'
+    local inspector = assert(require('resty.mlcache').new('peter_sslers:certificates:v1:', 'cert_cache'))
+    local function packed_pair()
+        local _, err, value = inspector:peek('test.example.com')
+        assert(not err, err)
+        return value
+    end
     local lock_key = 'test.example.com:autocert_lock'
     local marker_key = 'test.example.com:c'
     local function new_pair_present()
-        return cache:get(pair_key) == new_cert .. string.char(0) .. new_key
+        return packed_pair() == new_cert .. string.char(0) .. new_key
     end
     local ssl = require 'ngx.ssl'
     local installed = 0
@@ -83,7 +88,7 @@ return function(scenario)
                 assert(cache:get(marker_key) == 'ac', 'late owner removed replacement marker')
                 assert(installed == 0, 'late owner installed obsolete credentials')
             elseif scenario == 'expired' then
-                assert(not cache:get(pair_key), 'expired owner repopulated the cache')
+                assert(not packed_pair(), 'expired owner repopulated the cache')
                 assert(installed == 0, 'expired owner installed obsolete credentials')
             elseif scenario == 'new_certificate' then
                 assert(new_pair_present(), 'late owner overwrote newer certificate')

@@ -14,6 +14,7 @@ our $HttpConfig_1 = qq{
     lua_package_path "$pwd/lib/?.lua;;";
     error_log logs/error.log debug;
     lua_shared_dict  cert_cache 100k;
+    lua_shared_dict cert_cache_ipc 100k;
     lua_code_cache  on;
     init_by_lua_block {
         require "resty.core"
@@ -73,6 +74,7 @@ our $HttpConfig_2 = qq{
     lua_package_path "$pwd/lib/?.lua;;";
     error_log logs/error.log debug;
     lua_shared_dict  cert_cache 100k;
+    lua_shared_dict cert_cache_ipc 100k;
     lua_code_cache  on;
     init_by_lua_block {
         require "resty.core"
@@ -94,6 +96,8 @@ our $HttpConfig_2 = qq{
         certificate_pem['pkey'] = f:read("*all")
         f:close()           
         ssl_certhandler.set_cert_sharedcache("test.example.com", certificate_pem)
+        -- Recreate L1 so the following handshake genuinely exercises L2.
+        ssl_certhandler.initialize_worker(600, 60, 200)
     }
     server {
         listen unix:$ENV{TEST_NGINX_HTML_DIR}/nginx.sock ssl;

@@ -26,6 +26,7 @@ our $HttpConfig = qq{
     lua_package_path "$pwd/lib/?.lua;;";
     error_log logs/error.log debug;
     lua_shared_dict  cert_cache 100k;
+    lua_shared_dict cert_cache_ipc 100k;
     lua_code_cache  on;
     init_by_lua_block {
         require "resty.core"

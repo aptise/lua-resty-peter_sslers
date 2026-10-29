@@ -13,6 +13,7 @@ our $pwd = cwd();
 our $HttpConfig = qq{
     lua_package_path "$pwd/lib/?.lua;;";
     lua_shared_dict cert_cache 1m;
+    lua_shared_dict cert_cache_ipc 100k;
     lua_ssl_trusted_certificate "$ENV{TEST_SECURITY_DIR}/ca.crt";
     lua_ssl_verify_depth 2;
 };

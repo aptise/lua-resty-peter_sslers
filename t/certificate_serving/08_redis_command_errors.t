@@ -10,6 +10,7 @@ $ENV{REDIS_PORT} ||= '6379';
 our $HttpConfig = qq{
     lua_package_path "$pwd/lib/?.lua;;";
     lua_shared_dict cert_cache 100k;
+    lua_shared_dict cert_cache_ipc 100k;
     init_worker_by_lua_block {
         local handler = require 'resty.peter_sslers'
         handler.redis_update_defaults("$ENV{REDIS_HOST}", "$ENV{REDIS_PORT}", 9)

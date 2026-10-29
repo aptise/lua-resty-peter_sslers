@@ -4,7 +4,8 @@ use PeterSSLers::TestConfig;
 use Test::Nginx::Socket::Lua 'no_plan';
 use Cwd qw(cwd);
 our $pwd = cwd();
-our $HttpConfig = qq{lua_package_path "$pwd/lib/?.lua;;"; lua_shared_dict cert_cache 100k;};
+our $HttpConfig = qq{lua_package_path "$pwd/lib/?.lua;;"; lua_shared_dict cert_cache 100k;
+    lua_shared_dict cert_cache_ipc 100k;};
 no_long_string();
 run_tests();
 

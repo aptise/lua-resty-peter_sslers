@@ -3,6 +3,7 @@
 local ngx = ngx
 local cjson_safe = require "cjson.safe"
 local lrucache = require "resty.lrucache"
+local mlcache = require "resty.mlcache"
 local redis = require "resty.redis"
 local ssl = require "ngx.ssl"
 
@@ -27,7 +28,7 @@ local ngx_var = ngx.var
 local ssl_clear_certs = ssl.clear_certs
 local ssl_server_name = ssl.server_name
 
--- these use cdata pointers, so must use lrucache to share within the worker
+-- These cdata pointers stay in mlcache L1; only PEM is serialized into L2.
 local ssl_parse_pem_cert = ssl.parse_pem_cert
 local ssl_parse_pem_priv_key = ssl.parse_pem_priv_key
 local ssl_set_cert = ssl.set_cert
@@ -36,10 +37,13 @@ local ssl_set_priv_key = ssl.set_priv_key
 -- our caches
 local cert_cache = ngx.shared.cert_cache
 
--- we need to initialize the cache on the lua module level so that
--- it can be shared by all the requests served by each nginx worker process:
--- note that this is a WORKER cache
+-- A worker keeps one mlcache instance. Its L1 contains complete parsed pairs,
+-- while the shared L2 contains one packed PEM pair per domain.
 local cert_lrucache = nil
+local certificate_cache
+local certificate_pairing_pem_to_cdata
+local deserialize_certificate
+local cache_namespace = "peter_sslers:certificates:v1:"
 -- Worker PID and a per-worker sequence identify each provisioning attempt.
 local autocert_sequence = 0
 
@@ -95,13 +99,30 @@ local function initialize_worker(
         lru_maxitems
     )
 
-    -- init the cache
-    -- note `cert_lrucache` is global
-    local err
-    cert_lrucache, err = lrucache.new(lru_maxitems)
-    if not cert_lrucache then
-        return error("failed to create the cache: " .. (err or "unknown"))
-    end
+    local lru, err = lrucache.new(lru_maxitems)
+    if not lru then error("failed to create the cache: " .. (err or "unknown")) end
+    -- mlcache normally uses the shared TTL for L1 too. Cap it without changing
+    -- L2 expiry, retaining the separately configurable worker TTL.
+    cert_lrucache = {
+        get = function(_, key) return lru:get(key) end,
+        set = function(_, key, value, ttl)
+            if lru_cache_duration > 0 then
+                ttl = ttl and math.min(ttl, lru_cache_duration) or lru_cache_duration
+            end
+            return lru:set(key, value, ttl)
+        end,
+        delete = function(_, key) return lru:delete(key) end,
+        flush_all = function() return lru:flush_all() end,
+    }
+    certificate_cache, err = mlcache.new(cache_namespace, 'cert_cache', {
+        lru = cert_lrucache,
+        lru_size = lru_maxitems,
+        ttl = cert_cache_duration,
+        neg_ttl = cert_cache_duration,
+        ipc_shm = 'cert_cache_ipc',
+        l1_serializer = deserialize_certificate,
+    })
+    if not certificate_cache then error('failed to create mlcache: ' .. (err or 'unknown')) end
     return true
 end
 
@@ -251,28 +272,6 @@ local function has_autocertmarker(cert)
 end
 
 
-local function get_cert_sharedcache(server_name)
-    -- this is a PEM certificate
-    local certificate_pem = certificate_pairing()
-    local packed = cert_cache:get(server_name .. ":pair")
-    if packed then
-        local separator = packed:find(string.char(0), 1, true)
-        if separator then
-            certificate_pem.cert = packed:sub(1, separator - 1)
-            certificate_pem.pkey = packed:sub(separator + 1)
-        end
-    else
-        -- Legacy entries are used only for markers. Certificate/key parts
-        -- from older workers must never be combined across updates.
-        local marker = cert_cache:get(server_name .. ":c")
-        if marker == 'x' or marker == 'ac' then
-            certificate_pem.cert, certificate_pem.pkey = marker, marker
-        end
-    end
-    return certificate_pem
-end
-
-
 local function certificate_pairing_validate(cert)
     if certificate_pairing_data(cert) then
         if has_failmarker(cert) then
@@ -288,9 +287,7 @@ local function certificate_pairing_validate(cert)
 end
 
 
-local function certificate_pairing_pem_to_cdata(
-    certificate_pem, certificate_cdata
-)
+certificate_pairing_pem_to_cdata = function(certificate_pem, certificate_cdata)
     local cert, cert_err = ssl_parse_pem_cert(certificate_pem['cert'])
     local pkey, key_err = ssl_parse_pem_priv_key(certificate_pem['pkey'])
     certificate_cdata['cert'] = cert
@@ -299,6 +296,17 @@ local function certificate_pairing_pem_to_cdata(
         ngx_log(ngx_ERR, 'invalid certificate PEM: ', cert_err or key_err or 'unknown')
     end
     return certificate_cdata
+end
+
+
+deserialize_certificate = function(packed)
+    local separator = packed:find(string.char(0), 1, true)
+    if not separator then return nil, 'invalid cached certificate pair' end
+    local parsed = certificate_pairing_pem_to_cdata({
+        cert = packed:sub(1, separator - 1), pkey = packed:sub(separator + 1),
+    }, {})
+    if not parsed.cert or not parsed.pkey then return nil, 'invalid cached PEM' end
+    return parsed
 end
 
 
@@ -311,23 +319,16 @@ end
 
 
 local function set_autocertmarker_sharedcache(server_name)
-    cert_cache:delete(server_name .. ":pair")
-    local success, err, forcible
-    success, err, forcible = cert_cache:set(
-        server_name .. ":c", 'ac', cert_cache_duration
-    )
-    success, err, forcible = cert_cache:set(
-        server_name .. ":k", 'ac', cert_cache_duration
-    )
+    -- The mlcache callback already established a cache miss. This flag is only
+    -- status metadata; the owned lease is the provisioning coordination state.
+    return cert_cache:set(server_name .. ':c', 'ac', cert_cache_duration)
 end
 
 
 local function clear_autocertmarker_sharedcache(server_name)
-    local _cached = get_cert_sharedcache(server_name)
-    if has_autocertmarker(_cached) then
-        local success, err, forcible
-        success, err, forcible = cert_cache:delete(server_name .. ":c")
-        success, err, forcible = cert_cache:delete(server_name .. ":k")
+    if cert_cache:get(server_name .. ':c') == 'ac' then
+        cert_cache:delete(server_name .. ':c')
+        cert_cache:delete(server_name .. ':k') -- legacy marker cleanup on reload
     end
 end
 
@@ -339,71 +340,26 @@ local function release_autocert_lock(server_name, lock_key, token)
 end
 
 
-local function set_failmarker_sharedcache(server_name)
-    cert_cache:delete(server_name .. ":pair")
-    local success, err, forcible
-    success, err, forcible = cert_cache:set(
-        server_name .. ":c", 'x', cert_cache_duration
-    )
-    success, err, forcible = cert_cache:set(
-        server_name .. ":k", 'x', cert_cache_duration
-    )
-end
-
-
-local function set_failmarker_lrucache(server_name)
-    -- the `lru:set` functions don't have a return value
-    cert_lrucache:set(server_name .. ":c", 'x', lru_cache_duration)
-    cert_lrucache:set(server_name .. ":k", 'x', lru_cache_duration)
-end
-
-
 local function set_cert_lrucache(server_name, certificate_cdata)
-    -- Add key and cert to the worker's LRU cache
-    ngx_log(ngx_DEBUG,
-        "caching cert & key cdata into the worker : ", server_name
-    )
-    -- these 'set' functions don't have a return value
-    cert_lrucache:set(
-        server_name .. ":c", certificate_cdata['cert'], lru_cache_duration
-    )
-    cert_lrucache:set(
-        server_name .. ":k", certificate_cdata['pkey'], lru_cache_duration
-    )
+    ngx_log(ngx_DEBUG, "caching cert & key cdata into the worker : ", server_name)
+    cert_lrucache:set(server_name, certificate_cdata, lru_cache_duration)
 end
 
 
 local function set_cert_sharedcache(server_name, certificate_pem)
-    -- Add key and cert to the SHARED cache
-    ngx_log(ngx_DEBUG,
-        "caching PEM cert & key into the shared cache : ", server_name
-    )
-    -- Keep individual parts for status compatibility; readers use only the
-    -- atomic pair entry. Failed writes invalidate the complete cached pair.
-    local ok, err = cert_cache:set(server_name .. ":c", certificate_pem.cert, cert_cache_duration)
-    if ok then
-        ok, err = cert_cache:set(server_name .. ":k", certificate_pem.pkey, cert_cache_duration)
-    end
-    if ok then
-        ok, err = cert_cache:set(server_name .. ":pair",
-            certificate_pem.cert .. string.char(0) .. certificate_pem.pkey, cert_cache_duration)
-    end
+    ngx_log(ngx_DEBUG, "caching PEM cert & key into the shared cache : ", server_name)
+    local ok, err = certificate_cache:set(server_name, nil,
+        certificate_pem.cert .. string.char(0) .. certificate_pem.pkey)
     if not ok then
-        cert_cache:delete(server_name .. ":pair")
-        cert_cache:delete(server_name .. ":c")
-        cert_cache:delete(server_name .. ":k")
+        certificate_cache:delete(server_name)
+        cert_cache:delete(server_name .. ':c')
         ngx_log(ngx_ERR, 'failed to cache certificate pair: ', err)
+        return nil, err
     end
-    return ok, err
-end
-
-
-local function get_cert_lrucache(server_name)
-    -- this is a cdata certificate
-    local certificate_cdata = certificate_pairing()
-    certificate_cdata['cert'] = cert_lrucache:get(server_name .. ":c")
-    certificate_cdata['pkey'] = cert_lrucache:get(server_name .. ":k")
-    return certificate_cdata
+    -- Status metadata contains no duplicate private keys or certificates.
+    local indexed, index_err = cert_cache:set(server_name .. ':c', true, cert_cache_duration)
+    if not indexed then ngx_log(ngx_ERR, 'failed to index cached certificate: ', index_err) end
+    return true
 end
 
 
@@ -741,6 +697,134 @@ end
 -- START MAIN LOGIC
 
 
+local function fetch_certificate(
+    context, server_name, redis_strategy, fallback_server, enable_autocert, cert_preferences
+)
+    local certificate_pem = certificate_pairing()
+    local transient, parsed = false, nil
+    -- our upstream providers will return
+    -- a `certificate_pairing()` or `nil` value
+    -- certificate_pem will be our main focus
+
+    if redis_strategy ~= nil then
+        -- ok, try to get it from redis
+        ngx_log(ngx_DEBUG, "Redis: lookup enabled")
+        if not allowed_redis_strategy[redis_strategy] then
+            ngx_log(ngx_ERR,
+                "Redis: invalid `redis_strategy` not (1, 2) is `",
+                redis_strategy, "`"
+            )
+            context.skip = true
+            return nil, nil, -1
+        end
+
+        -- grab redis connection
+        local redcon, err = get_redcon()
+        if redcon == nil then
+            ngx_log(ngx_ERR, "Redis: could not get connection")
+            transient = true
+        else
+            -- actually query redis
+            if redis_strategy == 1 then
+                certificate_pem, err = prime_1__query_redis(redcon, server_name)
+            elseif redis_strategy == 2 then
+                certificate_pem, err = prime_2__query_redis(redcon, server_name)
+            end
+            if err then
+                transient = true
+                -- A failed command may leave an unusable socket; do not
+                -- return it to the keepalive pool.
+                redcon:close()
+            else
+                redis_keepalive(redcon)
+            end
+        end
+    end
+
+    if certificate_pairing_validate(certificate_pem) and not parsed then
+        parsed = certificate_pairing_pem_to_cdata(certificate_pem, {})
+        if not certificate_pairing_data(parsed) then
+            certificate_pem = certificate_pairing()
+            parsed = nil
+            transient = true
+        end
+    end
+
+    -- use a fallback search?
+    -- checking for nil first is cheaper than checking
+    -- `certificate_pairing_data`
+    if fallback_server ~= nil then
+        if not certificate_pairing_data(certificate_pem) then
+            if enable_autocert ~= nil then
+                -- fallback autocert
+                ngx_log(ngx_DEBUG, "UpstreamAPI: autocert enabled")
+                -- wrap this within an autocert marker;
+                -- this will keep other workers from hitting it
+                -- Atomic acquisition closes the race between cache miss
+                -- and marker creation. A bounded lease recovers crashed workers.
+                local lock_key = server_name .. ":autocert_lock"
+                autocert_sequence = autocert_sequence + 1
+                local token = ngx.worker.pid() .. ':' .. autocert_sequence
+                local acquired = cert_cache:add(lock_key, token, cert_cache_duration)
+                if not acquired then context.skip = true; return nil, nil, -1 end
+                context.lock_key, context.lock_token = lock_key, token
+                set_autocertmarker_sharedcache(server_name)
+                local ok, result = pcall(query_api_autocert,
+                    fallback_server, server_name, cert_preferences)
+                -- The API call yields. Its lease may have expired or
+                -- been flushed and acquired by another worker meanwhile.
+                if cert_cache:get(lock_key) ~= token then
+                    ngx_log(ngx_DEBUG, "discarding obsolete autocert response: ", server_name)
+                    context.skip = true
+                    return nil, nil, -1
+                end
+                if not ok then
+                    ngx_log(ngx_ERR, "autocert request failed: ", result)
+                    context.transient = true
+                    return nil, 'autocert request failed'
+                end
+                certificate_pem = result
+            else
+                -- fallback query
+                ngx_log(ngx_DEBUG, "UpstreamAPI: lookup enabled")
+                certificate_pem = query_api_upstream(
+                    fallback_server, server_name, cert_preferences
+                )
+            end
+        end
+    end
+
+    transient = transient or (certificate_pem and certificate_pem.transient)
+    if certificate_pairing_validate(certificate_pem) and not parsed then
+        parsed = certificate_pairing_pem_to_cdata(certificate_pem, {})
+        if not certificate_pairing_data(parsed) then
+            certificate_pem = certificate_pairing()
+            parsed = nil
+            transient = true
+        end
+    end
+    -- Recheck after PEM parsing, and retain ownership until publishing
+    -- the cache result. A stale attempt must not publish negative state.
+    if context.lock_key and cert_cache:get(context.lock_key) ~= context.lock_token then
+        context.skip = true
+        return nil, nil, -1
+    end
+    if certificate_pairing_validate(certificate_pem) then
+        context.packed = certificate_pem.cert .. string.char(0) .. certificate_pem.pkey
+        context.cdata = parsed
+        ngx_log(ngx_DEBUG, 'caching PEM cert & key into the shared cache : ', server_name)
+        return context.packed
+    end
+    ngx_log(ngx_DEBUG, 'failed to retrieve PEM for : ', server_name)
+    if transient then
+        context.transient = true
+        return nil, 'upstream certificate lookup failed'
+    end
+    context.absent = true
+    return nil
+end
+
+
 local function set_ssl_certificate(
     redis_strategy, fallback_server, enable_autocert, cert_preferences
 )
@@ -754,9 +838,8 @@ local function set_ssl_certificate(
     --                    should be {"certificate_signed__latest_single",
     --                               "certificate_signed__latest_multi"}
     --
-    -- note: cache the cdata certs for no more than 60s
-    -- these are PER-WORKER, and may stick around for this
-    -- long after an update/expire
+    -- Parsed objects remain worker-local with the configured L1 TTL cap.
+    -- mlcache IPC applies updates/expiration before the next certificate lookup.
 
     local server_name = ssl_server_name()
     ngx_log(ngx_DEBUG, "set_ssl_certificate : ", server_name)
@@ -773,199 +856,55 @@ local function set_ssl_certificate(
     if not server_name then return end
     ngx_log(ngx_DEBUG, "SNI Lookup for : ", server_name)
 
-    -- used for fallbacks
-    local certificate_pem = certificate_pairing()
-    local transient = false
-    local autocert_lock_key, autocert_lock_token
-
-    -- check worker lru cache first
-    -- this stashes an actual cert
-    local certificate_cdata = get_cert_lrucache(server_name)
-    if certificate_pairing_data(certificate_cdata) then
-        ngx_log(ngx_DEBUG, "cert_lrucache HIT for : ", server_name)
-        if has_failmarker(certificate_cdata) then
-            ngx_log(ngx_DEBUG,
-                "previously seen unsupported domain : ", server_name
-            )
-            -- don't bother with IP lookups
-            -- exit out and just fall back on the default ssl cert
+    -- update() needs a positive timeout: zero skips IPC event reads entirely.
+    local updated, update_err = certificate_cache:update(0.01)
+    if not updated then
+        ngx_log(ngx_ERR, 'failed to synchronize certificate cache: ', update_err)
+        return
+    end
+    local certificate_cdata, cache_err, hit_level = certificate_cache:get(server_name)
+    if hit_level == -1 then
+        ngx_log(ngx_DEBUG, 'cert_lrucache MISS for : ', server_name)
+        ngx_log(ngx_DEBUG, 'shared `cert_cache` MISS for : ', server_name)
+        if cert_cache:get(server_name .. ':autocert_lock') then return end
+        local context = {}
+        certificate_cdata, cache_err, hit_level = certificate_cache:get(server_name, {
+            resty_lock_opts = enable_autocert ~= nil and {
+                exptime = cert_cache_duration > 0 and cert_cache_duration or 60,
+                timeout = 0,
+            } or nil,
+            l1_serializer = function(packed)
+                if packed == context.packed then return context.cdata end
+                return deserialize_certificate(packed)
+            end,
+        }, fetch_certificate, context, server_name, redis_strategy, fallback_server, enable_autocert, cert_preferences)
+        if not cache_err and not context.skip then
+            if certificate_cdata then
+                cert_cache:set(server_name .. ':c', true, cert_cache_duration)
+                ngx_log(ngx_DEBUG, 'caching cert & key cdata into the worker : ', server_name)
+            elseif context.absent then
+                cert_cache:set(server_name .. ':c', 'x', cert_cache_duration)
+            end
+        elseif cache_err and context.cdata then
+            -- A valid backend result may still serve this handshake when shared
+            -- memory is full. Do not create an untracked/stale L1 cache entry.
+            certificate_cdata = context.cdata
+        end
+        if context.lock_key then
+            release_autocert_lock(server_name, context.lock_key, context.lock_token)
+        end
+        if cache_err and context.transient then
+            ngx_log(ngx_DEBUG, 'unable to provide ssl for : ', server_name, ' ', cache_err)
             return
         end
-    else
-        ngx_log(ngx_DEBUG, "cert_lrucache MISS for : ", server_name)
-        -- if the cert is unknown to the worker...
-        -- now we check the fallback system
-
-        -- check the nginx shared cache for certficate
-        certificate_pem = get_cert_sharedcache(server_name)
-        if certificate_pairing_data(certificate_pem) then
-            ngx_log(ngx_DEBUG, "shared `cert_cache` HIT for : ", server_name)
-            if has_failmarker(certificate_pem) then
-                ngx_log(ngx_DEBUG,
-                    "previously seen unsupported domain in ngx.shared.DICT : ",
-                    server_name
-                )
-                -- cache onto the worker's lru cache
-                set_failmarker_lrucache(server_name)
-
-                -- don't bother with more lookups;
-                -- exit out to nginx and just fall back on the default ssl cert
-                return
-            end
-
-            if has_autocertmarker(certificate_pem) then
-                ngx_log(ngx_DEBUG,
-                    "domain undergoing AutoCert ngx.shared.DICT : ", server_name
-                )
-                -- don't bother storing in the local cache
-                -- don't bother with more lookups;
-                -- exit out to nginx and just fall back on the default ssl cert
-                return
-            end
-
-        else
-            ngx_log(ngx_DEBUG, "shared `cert_cache` MISS for : ", server_name)
-
-            -- our upstream providers will return
-            -- a `certificate_pairing()` or `nil` value
-            -- certificate_pem will be our main focus
-
-            if redis_strategy ~= nil then
-                -- ok, try to get it from redis
-                ngx_log(ngx_DEBUG, "Redis: lookup enabled")
-                if not allowed_redis_strategy[redis_strategy] then
-                    ngx_log(ngx_ERR,
-                        "Redis: invalid `redis_strategy` not (1, 2) is `",
-                        redis_strategy, "`"
-                    )
-                    return
-                end
-
-                -- grab redis connection
-                local redcon, err = get_redcon()
-                if redcon == nil then
-                    ngx_log(ngx_ERR, "Redis: could not get connection")
-                    transient = true
-                else
-                    -- actually query redis
-                    if redis_strategy == 1 then
-                        certificate_pem, err = prime_1__query_redis(redcon, server_name)
-                    elseif redis_strategy == 2 then
-                        certificate_pem, err = prime_2__query_redis(redcon, server_name)
-                    end
-                    if err then
-                        transient = true
-                        -- A failed command may leave an unusable socket; do not
-                        -- return it to the keepalive pool.
-                        redcon:close()
-                    else
-                        redis_keepalive(redcon)
-                    end
-                end
-            end
-
-            if certificate_pairing_validate(certificate_pem) then
-                local parsed = certificate_pairing_pem_to_cdata(certificate_pem, {})
-                if not certificate_pairing_data(parsed) then
-                    certificate_pem = certificate_pairing()
-                    transient = true
-                end
-            end
-
-            -- use a fallback search?
-            -- checking for nil first is cheaper than checking
-            -- `certificate_pairing_data`
-            if fallback_server ~= nil then
-                if not certificate_pairing_data(certificate_pem) then
-                    if enable_autocert ~= nil then
-                        -- fallback autocert
-                        ngx_log(ngx_DEBUG, "UpstreamAPI: autocert enabled")
-                        -- wrap this within an autocert marker;
-                        -- this will keep other workers from hitting it
-                        -- Atomic acquisition closes the race between cache miss
-                        -- and marker creation. A bounded lease recovers crashed workers.
-                        local lock_key = server_name .. ":autocert_lock"
-                        autocert_sequence = autocert_sequence + 1
-                        local token = ngx.worker.pid() .. ':' .. autocert_sequence
-                        local acquired = cert_cache:add(lock_key, token, cert_cache_duration)
-                        if not acquired then return end
-                        autocert_lock_key, autocert_lock_token = lock_key, token
-                        set_autocertmarker_sharedcache(server_name)
-                        local ok, result = pcall(query_api_autocert,
-                            fallback_server, server_name, cert_preferences)
-                        -- The API call yields. Its lease may have expired or
-                        -- been flushed and acquired by another worker meanwhile.
-                        if cert_cache:get(lock_key) ~= token then
-                            ngx_log(ngx_DEBUG, "discarding obsolete autocert response: ", server_name)
-                            return
-                        end
-                        if not ok then
-                            release_autocert_lock(server_name, lock_key, token)
-                            ngx_log(ngx_ERR, "autocert request failed: ", result)
-                            return
-                        end
-                        certificate_pem = result
-                    else
-                        -- fallback query
-                        ngx_log(ngx_DEBUG, "UpstreamAPI: lookup enabled")
-                        certificate_pem = query_api_upstream(
-                            fallback_server, server_name, cert_preferences
-                        )
-                    end
-                end
-            end
-
-            transient = transient or (certificate_pem and certificate_pem.transient)
-            if certificate_pairing_validate(certificate_pem) then
-                local parsed = certificate_pairing_pem_to_cdata(certificate_pem, {})
-                if not certificate_pairing_data(parsed) then
-                    certificate_pem = certificate_pairing()
-                    transient = true
-                end
-            end
-            -- Recheck after PEM parsing, and retain ownership until publishing
-            -- the cache result. A stale attempt must not publish negative state.
-            if autocert_lock_key and cert_cache:get(autocert_lock_key) ~= autocert_lock_token then
-                return
-            end
-            -- after all that work, if we finally have PEM...
-            -- cache it!
-            if certificate_pairing_validate(certificate_pem) then
-                set_cert_sharedcache(server_name, certificate_pem)
-            else
-                ngx_log(ngx_DEBUG, "failed to retrieve PEM for : ", server_name)
-
-                if transient then
-                    if autocert_lock_key then
-                        release_autocert_lock(server_name, autocert_lock_key, autocert_lock_token)
-                    end
-                    ngx_log(ngx_DEBUG, "unable to provide ssl for : ", server_name)
-                    return
-                end
-
-                -- set a fail marker - SHARED cache
-                set_failmarker_sharedcache(server_name)
-
-                -- set a fail marker - WORKER cache
-                set_failmarker_lrucache(server_name)
-
-                -- exit out and just fall back on the default ssl cert
-            end
-            if autocert_lock_key then
-                release_autocert_lock(server_name, autocert_lock_key, autocert_lock_token)
-            end
-        end
+    elseif hit_level == 1 then
+        ngx_log(ngx_DEBUG, 'cert_lrucache HIT for : ', server_name)
+    elseif hit_level == 2 then
+        ngx_log(ngx_DEBUG, 'cert_lrucache MISS for : ', server_name)
+        ngx_log(ngx_DEBUG, 'shared `cert_cache` HIT for : ', server_name)
+        if certificate_cdata then ngx_log(ngx_DEBUG, 'caching cert & key cdata into the worker : ', server_name) end
     end
-
-    if certificate_pairing_data(certificate_pem) then
-        -- at this point we have a valid PEM
-        -- convert from PEM to cdata for WORKER cache (and this server!)
-        certificate_cdata = certificate_pairing_pem_to_cdata(
-            certificate_pem, certificate_cdata
-        )
-        set_cert_lrucache(server_name, certificate_cdata)
-    end
-
+    if cache_err then ngx_log(ngx_ERR, 'certificate cache lookup failed: ', cache_err) end
     if certificate_pairing_data(certificate_cdata) then
         -- since we have a certs for this server, now we can continue...
         ngx_log(ngx_DEBUG, "can provide ssl for : ", server_name)
@@ -1029,11 +968,12 @@ local function status_ssl_certs()
             -- ngx_log(ngx_DEBUG, "_domain ", _domain)
             -- ngx_log(ngx_DEBUG, "_ext ", _ext)
             -- ngx_log(ngx_DEBUG, "v ", v)
-            if v == 'x' then
+            local remaining = certificate_cache:peek(_domain)
+            if v == 'x' and remaining ~= nil then
                 table.insert(ks_invalid, _domain)
             elseif v == 'ac' then
                 table.insert(ks_autocert, _domain)
-            else
+            elseif v == true and remaining ~= nil then
                 table.insert(ks_valid, _domain)
             end
         end
@@ -1085,7 +1025,13 @@ local function expire_ssl_certs()
     ngx_header["x-peter-sslers"] = _VERSION
     local prefix = ngx_var.location
     if ngx_var.request_uri == prefix .. '/all' then
-        cert_cache:flush_all()
+        local ok, err = certificate_cache:purge()
+        if not ok then
+            ngx_log(ngx_ERR, 'failed to purge certificate cache: ', err)
+            ngx.status = 503
+            ngx_say('{"result":"error","reason":"Cache invalidation failed"}')
+            return
+        end
         ngx_say(
             '{"result": "success", "expired": "all", ' ..
             '"server": "peter_sslers:openresty", ' ..
@@ -1097,6 +1043,13 @@ local function expire_ssl_certs()
         ngx_var.request_uri, '^' .. prefix .. '/domain/([%w-.]+)$'
     )
     if _domain then
+        local ok, err = certificate_cache:delete(_domain)
+        if not ok then
+            ngx_log(ngx_ERR, 'failed to expire certificate: ', err)
+            ngx.status = 503
+            ngx_say('{"result":"error","reason":"Cache invalidation failed"}')
+            return
+        end
         cert_cache:delete(_domain .. ":pair")
         cert_cache:delete(_domain .. ":c")
         cert_cache:delete(_domain .. ":k")

@@ -10,6 +10,7 @@ sub worker_config {
     return qq{
         lua_package_path "$pwd/lib/?.lua;;";
         lua_shared_dict cert_cache 1m;
+    lua_shared_dict cert_cache_ipc 100k;
         lua_shared_dict audit_control 100k;
         init_worker_by_lua_block {
             local start = assert(loadfile("$pwd/t/audit/autocert_workers.lua"))()

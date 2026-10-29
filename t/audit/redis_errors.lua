@@ -11,7 +11,7 @@ return function(case)
     }
     assert(known[case], 'unknown Redis regression')
     local saved_ngx = ngx
-    local names = {'cjson.safe', 'resty.lrucache', 'resty.redis', 'ngx.ssl', 'resty.http'}
+    local names = {'cjson.safe', 'resty.lrucache', 'resty.redis', 'ngx.ssl', 'resty.http', 'resty.mlcache'}
     local saved = {}
     for _, name in ipairs(names) do saved[name] = package.loaded[name] end
     local null, cache = {}, {}
@@ -29,7 +29,9 @@ return function(case)
     } end}
     package.loaded['resty.lrucache'] = {new = function()
         local values = {}
-        return {get = function(_, k) return values[k] end,
+        return {delete = function(_, k) values[k] = nil end,
+            flush_all = function() for k in pairs(values) do values[k] = nil end end,
+            get = function(_, k) return values[k] end,
             set = function(_, k, v) values[k] = v end}
     end}
     package.loaded['ngx.ssl'] = {
@@ -70,6 +72,7 @@ return function(case)
         api_calls = api_calls + 1
         return {status = 200, body = 'injected response'}
     end} end}
+    package.loaded['resty.mlcache'] = assert(loadfile('t/lib/mlcache_fake.lua'))()
     local ok, err = pcall(function()
         local handler = assert(loadfile('lib/resty/peter_sslers.lua'))()
         handler.initialize_worker(600, 60, 200)

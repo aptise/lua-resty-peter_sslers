@@ -1,7 +1,3 @@
-* replace first-party nginx caching with lua-resty-mlcache
-  * https://github.com/thibaultcha/lua-resty-mlcache
-
-
 * some work could/should be done to make redis connections more performant
   * benchmark tests
   * ensure connections are performant

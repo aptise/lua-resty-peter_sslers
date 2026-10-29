@@ -1,7 +1,7 @@
 -- Deterministic backend fault injection; no Redis server or external API needed.
 local function run(case)
     local saved_ngx = ngx
-    local names = {'cjson.safe', 'resty.lrucache', 'resty.redis', 'ngx.ssl', 'resty.http'}
+    local names = {'cjson.safe', 'resty.lrucache', 'resty.redis', 'ngx.ssl', 'resty.http', 'resty.mlcache'}
     local saved = {}
     for _, name in ipairs(names) do saved[name] = package.loaded[name] end
     local cache, api_calls, selected = {}, 0, 0
@@ -19,7 +19,7 @@ local function run(case)
                 cache[k] = v; return true
             end,
             set = function(_, k, v)
-                if fail_key_write and k == 'test.example.com:k' then return nil, 'no memory' end
+                if fail_key_write and k == 'test.example.com:pair' then return nil, 'no memory' end
                 cache[k] = v; return true
             end,
             delete = function(_, k) cache[k] = nil end,
@@ -33,7 +33,9 @@ local function run(case)
     package.loaded['cjson.safe'] = {null = null, decode = function() return payload end}
     package.loaded['resty.lrucache'] = {new = function()
         local values = {}
-        return {get = function(_, k) return values[k] end,
+        return {delete = function(_, k) values[k] = nil end,
+            flush_all = function() for k in pairs(values) do values[k] = nil end end,
+            get = function(_, k) return values[k] end,
             set = function(_, k, v) values[k] = v end}
     end}
     package.loaded['ngx.ssl'] = {
@@ -61,6 +63,7 @@ local function run(case)
             return {status = 200, body = 'injected response'}
         end,
     } end}
+    package.loaded['resty.mlcache'] = assert(loadfile('t/lib/mlcache_fake.lua'))()
     local ok, err = pcall(function()
         local m = assert(loadfile('lib/resty/peter_sslers.lua'))()
         m.initialize_worker(600, 60, 200)
@@ -106,7 +109,7 @@ local function run(case)
             end
             payload = {certificate_signed__latest_multi = {fullchain = {pem = 'old-cert'}, private_key = {pem = 'old-key'}}}
             m.set_ssl_certificate(nil, 'http://backend', 1)
-            assert(cache['test.example.com:c'] == 'new-cert', 'late response must not overwrite a replacement certificate')
+            assert(cache['test.example.com:c'] == true and cache['test.example.com:pair']:find('new-cert', 1, true), 'late response must not overwrite a replacement certificate')
         elseif case == 'lease_tokens' then
             local tokens = {}
             on_request = function()
@@ -132,15 +135,15 @@ local function run(case)
             m.set_cert_sharedcache('test.example.com', {cert = 'old-cert', pkey = 'old-key'})
             fail_key_write = true
             m.set_cert_sharedcache('test.example.com', {cert = 'new-cert', pkey = 'new-key'})
-            assert(not (cache['test.example.com:c'] == 'new-cert' and cache['test.example.com:k'] == 'old-key'),
-                'failed cache update must not expose a mixed certificate/key pair')
+            assert(cache['test.example.com:pair'] == nil and cache['test.example.com:c'] == nil,
+                'failed cache update must not expose a certificate/key pair')
         elseif case == 'expire' then
             m.set_cert_sharedcache('test.example.com', {cert = 'cert', pkey = 'key'})
             m.set_cert_sharedcache('other.example.com', {cert = 'other', pkey = 'other-key'})
             m.expire_ssl_certs()
             assert(cache['test.example.com:c'] == nil and cache['test.example.com:k'] == nil,
                 'expiration must remove both certificate parts')
-            assert(cache['other.example.com:c'] == 'other', 'expiration must preserve other domains')
+            assert(cache['other.example.com:c'] == true and cache['other.example.com:pair']:find('other', 1, true), 'expiration must preserve other domains')
         elseif case == 'connect' then
             fail_connect = true
             local con, reason = m.get_redcon()
