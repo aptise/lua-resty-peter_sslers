@@ -57,6 +57,12 @@ local redis_server = '127.0.0.1'
 local redis_port = '6379'
 local redis_db_number = 9
 local _VERSION = '0.5.0'
+local redis_options = {}
+local api_options = {}
+local redis_revision, api_revision = 0, 0
+local pool_namespace = tostring({})
+local api_endpoints = {}
+local api_endpoint_count = 0
 
 
 local function initialize()
@@ -401,11 +407,67 @@ local function get_cert_lrucache(server_name)
 end
 
 
-local function redis_update_defaults(_redis_server, _redis_port, _redis_db_number)
+-- Configuration is copied and certificates are parsed once per configuration,
+-- never during individual handshakes. Passwords never appear in pool names.
+local function connection_options(options, is_redis)
+    assert(type(options) == 'table', 'connection options must be a table')
+    local result = {}
+    local allowed = {username = true, password = true, ssl = is_redis,
+        ssl_verify = true, server_name = true, client_cert = true,
+        client_key = true, timeout = true, authorization = not is_redis}
+    for key, value in pairs(options) do
+        assert(allowed[key], 'unknown connection option: ' .. tostring(key))
+        result[key] = value
+    end
+    for _, key in ipairs({'username', 'password', 'server_name', 'authorization'}) do
+        assert(result[key] == nil or type(result[key]) == 'string', key .. ' must be a string')
+    end
+    assert(result.ssl == nil or type(result.ssl) == 'boolean', 'ssl must be a boolean')
+    assert(result.ssl_verify == nil or type(result.ssl_verify) == 'boolean', 'ssl_verify must be a boolean')
+    if result.ssl_verify == nil then result.ssl_verify = true end
+    assert(result.timeout == nil or (type(result.timeout) == 'number' and result.timeout > 0),
+        'timeout must be a positive number of milliseconds')
+    assert(not result.username or result.password ~= nil, 'username requires password')
+    assert(not result.authorization or (not result.username and not result.password),
+        'authorization and username/password are mutually exclusive')
+    assert(not result.authorization or not result.authorization:find('[\r\n]'), 'invalid authorization header')
+    assert((result.client_cert == nil) == (result.client_key == nil),
+        'client_cert and client_key must be supplied together')
+    if result.client_cert ~= nil then
+        assert(not is_redis or result.ssl, 'client certificates require ssl=true')
+        assert(type(result.client_cert) == 'string' and type(result.client_key) == 'string',
+            'client_cert and client_key must be PEM strings')
+        local err
+        result.ssl_client_cert, err = ssl_parse_pem_cert(result.client_cert)
+        assert(result.ssl_client_cert, 'invalid client certificate: ' .. (err or 'unknown'))
+        result.ssl_client_priv_key, err = ssl_parse_pem_priv_key(result.client_key)
+        assert(result.ssl_client_priv_key, 'invalid client private key: ' .. (err or 'unknown'))
+        result.client_cert, result.client_key = nil, nil
+    end
+    if not is_redis and result.password then
+        result.authorization = 'Basic ' .. ngx.encode_base64((result.username or '') .. ':' .. result.password)
+        result.username, result.password = nil, nil
+    end
+    return result
+end
+
+
+local function redis_update_defaults(_redis_server, _redis_port, _redis_db_number, options)
     -- override system defaults
+    local configured = options and connection_options(options, true)
     redis_server = _redis_server
     redis_port = _redis_port
     redis_db_number = _redis_db_number
+    if configured then
+        redis_options = configured
+        redis_revision = redis_revision + 1
+    end
+end
+
+
+local function api_update_defaults(options)
+    api_options = connection_options(options, false)
+    api_revision = api_revision + 1
 end
 
 
@@ -415,9 +477,35 @@ local function get_redcon()
     -- and changes to db9 if it is new
     -- Setup Redis connection
     local redcon = redis:new()
+    if redis_options.timeout then redcon:set_timeout(redis_options.timeout) end
+    if redis_options.ssl then
+        local major, minor = tostring(redis._VERSION):match('^(%d+)%.(%d+)')
+        if not major or (tonumber(major) == 0 and tonumber(minor) < 28) then
+            redcon:close()
+            return nil, 'Redis TLS requires lua-resty-redis >= 0.28'
+        end
+    end
+    if redis_options.ssl_client_cert then
+        -- lua-resty-redis has no public client-certificate setter. Isolate its
+        -- socket access here and fail closed if the required API is unavailable.
+        local sock = rawget(redcon, '_sock')
+        if not sock or type(sock.setclientcert) ~= 'function' then
+            redcon:close()
+            return nil, 'Redis client certificate support is unavailable'
+        end
+        local ok, err = sock:setclientcert(redis_options.ssl_client_cert, redis_options.ssl_client_priv_key)
+        if not ok then redcon:close(); return nil, err end
+    end
+    local connect_options = {
+        pool = 'peter_sslers:redis:' .. pool_namespace .. ':' .. redis_revision
+            .. ':' .. redis_server .. ':' .. redis_port .. ':' .. redis_db_number,
+        ssl = redis_options.ssl,
+        ssl_verify = redis_options.ssl_verify ~= false,
+        server_name = redis_options.server_name or redis_server,
+    }
     -- Connect to redis.  NOTE: this is a pooled connection
     ngx_log(ngx_DEBUG, "Redis: about to connect to redis: ", redis_server, ":", redis_port)
-    local called, ok, err = pcall(redcon.connect, redcon, redis_server, redis_port)
+    local called, ok, err = pcall(redcon.connect, redcon, redis_server, redis_port, connect_options)
     if not called then err, ok = ok, nil end
     if not ok then
         ngx_log(ngx_ERR, "Redis: failed to connect to redis: ", err)
@@ -433,6 +521,18 @@ local function get_redcon()
         return nil, err
     end
     if times <= 0 then
+        if redis_options.password then
+            local ok, err
+            if redis_options.username then
+                ok, err = redcon:auth(redis_options.username, redis_options.password)
+            else
+                ok, err = redcon:auth(redis_options.password)
+            end
+            if not ok then
+                redcon:close()
+                return nil, 'Redis authentication failed'
+            end
+        end
         ngx_log(ngx_DEBUG, "Redis: changing to db:", redis_db_number, ", times:", times)
         local ok, err = redcon:select(redis_db_number)
         if not ok then
@@ -545,6 +645,39 @@ local function canonical_server_name(name)
 end
 
 
+local function api_request(fallback_server, uri, params)
+    local options = api_options
+    if options.ssl_client_cert and not uri:match('^https://') then
+        return nil, 'API client certificates require HTTPS'
+    end
+    local httpc = http_new()
+    if options.timeout then httpc:set_timeout(options.timeout) end
+    params.headers = params.headers or {}
+    if options.authorization then params.headers.Authorization = options.authorization end
+    params.ssl_verify = options.ssl_verify ~= false
+    params.ssl_server_name = options.server_name
+    params.ssl_client_cert = options.ssl_client_cert
+    params.ssl_client_priv_key = options.ssl_client_priv_key
+    if options.ssl_client_cert then
+        local major, minor, patch = tostring(http._VERSION):match('^(%d+)%.(%d+)%.(%d+)')
+        local supported = major and (tonumber(major) > 0 or tonumber(minor) > 17
+            or (tonumber(minor) == 17 and tonumber(patch) >= 1))
+        if not supported or not httpc.sock or type(httpc.sock.setclientcert) ~= 'function' then
+            return nil, 'HTTP client certificate support is unavailable'
+        end
+    end
+    if api_revision > 0 then
+        if not api_endpoints[fallback_server] then
+            api_endpoint_count = api_endpoint_count + 1
+            api_endpoints[fallback_server] = api_endpoint_count
+        end
+        params.pool = 'peter_sslers:api:' .. pool_namespace .. ':' .. api_revision
+            .. ':' .. api_endpoints[fallback_server]
+    end
+    return httpc:request_uri(uri, params)
+end
+
+
 local function query_api_upstream(
     fallback_server, server_name, cert_preferences
 )
@@ -561,8 +694,7 @@ local function query_api_upstream(
     local data_uri = fallback_server .. "/domain/" .. server_name ..
         "/config.json?openresty=1"
     ngx_log(ngx_DEBUG, "querying upstream API server at: ", data_uri)
-    local httpc = http_new()
-    local response, err = httpc:request_uri(data_uri, {method = "GET", })
+    local response, err = api_request(fallback_server, data_uri, {method = "GET", })
     -- response could be nil on a failure, but passing it into the
     -- following function will give us an empty cert
     local certificate_pem = api_response_to_cert(
@@ -587,8 +719,7 @@ local function query_api_autocert(
 
     local data_uri = fallback_server .. "/api/domain/autocert.json?openresty=1"
     ngx_log(ngx_DEBUG, "querying autocert API server at: ", data_uri)
-    local httpc = http_new()
-    local response, err = httpc:request_uri(data_uri, {
+    local response, err = api_request(fallback_server, data_uri, {
         method = "POST",
         body = "domain_name=" .. server_name,
         headers = {["Content-Type"] = "application/x-www-form-urlencoded"},
@@ -991,6 +1122,8 @@ end
 -- * set_cert_sharedcache
 
 local _M = {get_redcon = get_redcon,
+            api_update_defaults = api_update_defaults,
+            valkey_update_defaults = redis_update_defaults,
             redis_keepalive = redis_keepalive,
             redis_update_defaults = redis_update_defaults,
             prime_1__query_redis = prime_1__query_redis,

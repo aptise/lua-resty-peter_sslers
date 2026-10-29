@@ -5,6 +5,8 @@ LUA_INCLUDE_DIR ?= $(PREFIX)/include
 LUA_LIB_DIR     ?= $(PREFIX)/lib/lua/$(LUA_VERSION)
 INSTALL         ?= install
 TEST_FILE       ?= t
+BACKEND         ?= valkey
+PYTHON          ?= python3
 
 export PATH := $(OPENRESTY_PREFIX)/nginx/sbin:$(PATH)
 PROVE=TEST_NGINX_NO_SHUFFLE=1 prove -I../test-nginx/lib -r $(TEST_FILE)
@@ -12,7 +14,7 @@ PROVE=TEST_NGINX_NO_SHUFFLE=1 prove -I../test-nginx/lib -r $(TEST_FILE)
 # Keep in sync with .luacov, so that we show the right amount of output
 LUACOV_NUM_MODULES ?= 3
 
-.PHONY: all test install
+.PHONY: all test test-secure install
 
 all: ;
 
@@ -22,6 +24,9 @@ install: all
 
 test: all
 	$(PROVE)
+
+test-secure: all
+	$(PYTHON) t/security/run.py --backend $(BACKEND) --full-suite
 
 coverage: all
 	@rm -f luacov.stats.out

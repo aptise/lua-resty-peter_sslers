@@ -74,3 +74,25 @@ jobs:
       run: |
         luacov
         tail -n 8 luacov.report.out
+
+  secure_backends:
+    name: Secure ${{ matrix.backend }} connections
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        backend: [valkey, redis]
+    container:
+      image: openresty/openresty:1.31-alpine-fat
+      options: --init
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install secure test dependencies
+        run: |
+          apk add --no-cache python3 openssl perl perl-dev make ${{ matrix.backend }}
+          opm get ledgetech/lua-resty-http
+          PERL_MM_USE_DEFAULT=1 cpan App::cpanminus
+          cpanm -n Test::Nginx
+      - name: Test isolated password, TLS, and mTLS connections
+        env:
+          TEST_NGINX_NO_SHUFFLE: '1'
+        run: python3 t/security/run.py --backend ${{ matrix.backend }} --full-suite
