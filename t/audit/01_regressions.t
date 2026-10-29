@@ -315,3 +315,93 @@ GET /t
 ok
 --- no_error_log
 [error]
+
+=== TEST: lease_replaced
+--- config eval
+qq{
+    location /t {
+        content_by_lua_block {
+            local run = assert(loadfile("$::pwd/t/audit/regressions.lua"))()
+            run("lease_replaced")
+            ngx.say("ok")
+        }
+    }
+}
+--- request
+GET /t
+--- response_body
+ok
+--- no_error_log
+[error]
+
+=== TEST: lease_exception
+--- config eval
+qq{
+    location /t {
+        content_by_lua_block {
+            local run = assert(loadfile("$::pwd/t/audit/regressions.lua"))()
+            run("lease_exception")
+            ngx.say("ok")
+        }
+    }
+}
+--- request
+GET /t
+--- response_body
+ok
+--- no_error_log
+[error]
+
+=== TEST: lease_expired
+--- config eval
+qq{
+    location /t {
+        content_by_lua_block {
+            local run = assert(loadfile("$::pwd/t/audit/regressions.lua"))()
+            run("lease_expired")
+            ngx.say("ok")
+        }
+    }
+}
+--- request
+GET /t
+--- response_body
+ok
+--- no_error_log
+[error]
+
+=== TEST: lease_new_certificate
+--- config eval
+qq{
+    location /t {
+        content_by_lua_block {
+            local run = assert(loadfile("$::pwd/t/audit/regressions.lua"))()
+            run("lease_new_certificate")
+            ngx.say("ok")
+        }
+    }
+}
+--- request
+GET /t
+--- response_body
+ok
+--- no_error_log
+[error]
+
+=== TEST: lease_tokens
+--- config eval
+qq{
+    location /t {
+        content_by_lua_block {
+            local run = assert(loadfile("$::pwd/t/audit/regressions.lua"))()
+            run("lease_tokens")
+            ngx.say("ok")
+        }
+    }
+}
+--- request
+GET /t
+--- response_body
+ok
+--- no_error_log
+[error]

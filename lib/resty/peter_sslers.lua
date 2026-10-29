@@ -40,6 +40,8 @@ local cert_cache = ngx.shared.cert_cache
 -- it can be shared by all the requests served by each nginx worker process:
 -- note that this is a WORKER cache
 local cert_lrucache = nil
+-- Worker PID and a per-worker sequence identify each provisioning attempt.
+local autocert_sequence = 0
 
 -- cert_cache_duration is for the shared dict;
 -- misses fall back onto Redis/PeterSslers
@@ -321,6 +323,13 @@ local function clear_autocertmarker_sharedcache(server_name)
         success, err, forcible = cert_cache:delete(server_name .. ":c")
         success, err, forcible = cert_cache:delete(server_name .. ":k")
     end
+end
+
+
+local function release_autocert_lock(server_name, lock_key, token)
+    if cert_cache:get(lock_key) ~= token then return end
+    clear_autocertmarker_sharedcache(server_name)
+    cert_cache:delete(lock_key)
 end
 
 
@@ -683,6 +692,7 @@ local function set_ssl_certificate(
     -- used for fallbacks
     local certificate_pem = certificate_pairing()
     local transient = false
+    local autocert_lock_key, autocert_lock_token
 
     -- check worker lru cache first
     -- this stashes an actual cert
@@ -785,14 +795,22 @@ local function set_ssl_certificate(
                         -- Atomic acquisition closes the race between cache miss
                         -- and marker creation. A bounded lease recovers crashed workers.
                         local lock_key = server_name .. ":autocert_lock"
-                        local acquired = cert_cache:add(lock_key, true, cert_cache_duration)
+                        autocert_sequence = autocert_sequence + 1
+                        local token = ngx.worker.pid() .. ':' .. autocert_sequence
+                        local acquired = cert_cache:add(lock_key, token, cert_cache_duration)
                         if not acquired then return end
+                        autocert_lock_key, autocert_lock_token = lock_key, token
                         set_autocertmarker_sharedcache(server_name)
                         local ok, result = pcall(query_api_autocert,
                             fallback_server, server_name, cert_preferences)
-                        clear_autocertmarker_sharedcache(server_name)
-                        cert_cache:delete(lock_key)
+                        -- The API call yields. Its lease may have expired or
+                        -- been flushed and acquired by another worker meanwhile.
+                        if cert_cache:get(lock_key) ~= token then
+                            ngx_log(ngx_DEBUG, "discarding obsolete autocert response: ", server_name)
+                            return
+                        end
                         if not ok then
+                            release_autocert_lock(server_name, lock_key, token)
                             ngx_log(ngx_ERR, "autocert request failed: ", result)
                             return
                         end
@@ -815,6 +833,11 @@ local function set_ssl_certificate(
                     transient = true
                 end
             end
+            -- Recheck after PEM parsing, and retain ownership until publishing
+            -- the cache result. A stale attempt must not publish negative state.
+            if autocert_lock_key and cert_cache:get(autocert_lock_key) ~= autocert_lock_token then
+                return
+            end
             -- after all that work, if we finally have PEM...
             -- cache it!
             if certificate_pairing_validate(certificate_pem) then
@@ -823,6 +846,9 @@ local function set_ssl_certificate(
                 ngx_log(ngx_DEBUG, "failed to retrieve PEM for : ", server_name)
 
                 if transient then
+                    if autocert_lock_key then
+                        release_autocert_lock(server_name, autocert_lock_key, autocert_lock_token)
+                    end
                     ngx_log(ngx_DEBUG, "unable to provide ssl for : ", server_name)
                     return
                 end
@@ -834,6 +860,9 @@ local function set_ssl_certificate(
                 set_failmarker_lrucache(server_name)
 
                 -- exit out and just fall back on the default ssl cert
+            end
+            if autocert_lock_key then
+                release_autocert_lock(server_name, autocert_lock_key, autocert_lock_token)
             end
         end
     end

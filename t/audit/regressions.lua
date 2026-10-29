@@ -9,6 +9,7 @@ local function run(case)
     local payload = {}
     local sni = "test.example.com"
     local deny_lock, throw_api = false, false
+    local on_request
     local fail_connect, fail_select, corrupt, outage = false, false, false, false
     local function dict()
         return {
@@ -26,6 +27,7 @@ local function run(case)
     end
     local null = {}
     ngx = {shared = {cert_cache = dict()}, null = null,
+        worker = {pid = function() return 1234 end},
         log = function() end, say = function() end, header = {},
         var = {location = '/expire', request_uri = '/expire/domain/test.example.com'}}
     package.loaded['cjson.safe'] = {null = null, decode = function() return payload end}
@@ -53,6 +55,7 @@ local function run(case)
     package.loaded['resty.http'] = {new = function() return {
         request_uri = function()
             api_calls = api_calls + 1
+            if on_request then on_request() end
             if throw_api then error("injected HTTP exception") end
             if outage then return nil, 'timeout' end
             return {status = 200, body = 'injected response'}
@@ -76,6 +79,45 @@ local function run(case)
             deny_lock = true
             m.set_ssl_certificate(nil, 'http://backend', 1)
             assert(api_calls == 0, 'losing atomic lock acquisition must not provision')
+        elseif case == 'lease_replaced' or case == 'lease_exception' then
+            on_request = function()
+                cache['test.example.com:autocert_lock'] = 'new-owner'
+                cache['test.example.com:c'], cache['test.example.com:k'] = 'ac', 'ac'
+            end
+            throw_api = case == 'lease_exception'
+            payload = {certificate_signed__latest_multi = {fullchain = {pem = 'old-cert'}, private_key = {pem = 'old-key'}}}
+            m.set_ssl_certificate(nil, 'http://backend', 1)
+            assert(cache['test.example.com:autocert_lock'] == 'new-owner', 'late request must not release a replacement lock')
+            assert(cache['test.example.com:c'] == 'ac', 'late request must preserve the new owner marker')
+            assert(cache['test.example.com:pair'] == nil, 'late request must discard its old response')
+        elseif case == 'lease_expired' then
+            on_request = function()
+                cache['test.example.com:autocert_lock'] = nil
+                cache['test.example.com:c'], cache['test.example.com:k'] = nil, nil
+            end
+            payload = {certificate_signed__latest_multi = {fullchain = {pem = 'old-cert'}, private_key = {pem = 'old-key'}}}
+            m.set_ssl_certificate(nil, 'http://backend', 1)
+            assert(cache['test.example.com:pair'] == nil, 'expired owner must not publish a late certificate')
+            assert(cache['test.example.com:c'] == nil, 'expired owner must not recreate cached state')
+        elseif case == 'lease_new_certificate' then
+            on_request = function()
+                cache['test.example.com:autocert_lock'] = nil
+                m.set_cert_sharedcache('test.example.com', {cert = 'new-cert', pkey = 'new-key'})
+            end
+            payload = {certificate_signed__latest_multi = {fullchain = {pem = 'old-cert'}, private_key = {pem = 'old-key'}}}
+            m.set_ssl_certificate(nil, 'http://backend', 1)
+            assert(cache['test.example.com:c'] == 'new-cert', 'late response must not overwrite a replacement certificate')
+        elseif case == 'lease_tokens' then
+            local tokens = {}
+            on_request = function()
+                tokens[#tokens + 1] = cache['test.example.com:autocert_lock']
+            end
+            payload = {certificate_signed__latest_multi = {}}
+            m.set_ssl_certificate(nil, 'http://backend', 1)
+            m.set_ssl_certificate(nil, 'http://backend', 1)
+            assert(api_calls == 2, 'failed attempt must release its own lock')
+            assert(type(tokens[1]) == 'string', 'autocert lock must identify its owner')
+            assert(tokens[1] ~= tokens[2], 'attempts must have distinct ownership tokens')
         elseif case == 'api_exception' then
             throw_api = true
             m.set_ssl_certificate(nil, 'http://backend', 1)
