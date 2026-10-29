@@ -1,3 +1,6 @@
+use FindBin qw($Bin);
+use lib "$Bin/../lib";
+use PeterSSLers::TestConfig;
 use Test::Nginx::Socket::Lua 'no_plan';
 use Cwd qw(cwd);
 
@@ -6,7 +9,6 @@ $ENV{TEST_NGINX_RESOLVER} ||= '1.1.1.1';
 $ENV{TEST_NGINX_PWD} ||= $pwd;
 $ENV{TEST_COVERAGE} ||= 0;
 $ENV{TEST_NGINX_HTML_DIR} ||= html_dir();
-$ENV{TEST_NGINX_SERVER_SSL_PORT} ||= 12345;
 
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 #
@@ -50,12 +52,12 @@ our $HttpConfig = qq{
             
             -- nil to disable
             local redis_strategy = nil
-			local fallback_server = 'http://127.0.0.1:1984/.well-known/admin'
+			local fallback_server = 'http://127.0.0.1:$ENV{TEST_NGINX_SERVER_PORT}/.well-known/admin'
 			local enable_autocert = nil
             ssl_certhandler_set(redis_strategy, fallback_server, enable_autocert)
         }
-        ssl_certificate ../../cert/example.com.crt;  # fallback cert
-        ssl_certificate_key ../../cert/example.com.key;  # fallback key
+        ssl_certificate "$pwd/t/cert/example.com.crt";  # fallback cert
+        ssl_certificate_key "$pwd/t/cert/example.com.key";  # fallback key
         server_tokens off;
         location /actual-test {
             default_type 'text/plain';
@@ -98,8 +100,8 @@ our $HttpConfig_bad_host = qq{
 			local enable_autocert = nil
             ssl_certhandler_set(redis_strategy, fallback_server, enable_autocert)
         }
-        ssl_certificate ../../cert/example.com.crt;  # fallback cert
-        ssl_certificate_key ../../cert/example.com.key;  # fallback key
+        ssl_certificate "$pwd/t/cert/example.com.crt";  # fallback cert
+        ssl_certificate_key "$pwd/t/cert/example.com.key";  # fallback key
         server_tokens off;
         location /actual-test {
             default_type 'text/plain';
@@ -109,7 +111,7 @@ our $HttpConfig_bad_host = qq{
     }
 };
 our $Config_single = qq{
-    lua_ssl_trusted_certificate ../../cert/_all.crt;
+    lua_ssl_trusted_certificate "$pwd/t/cert/_all.crt";
     server_tokens off;
 	location "/.well-known/admin/domain/test.example.com/config.json" {
 		# this will be called by the ssl server's `ssl_certificate_by_lua_block`
@@ -164,7 +166,7 @@ our $Config_single = qq{
     }
 };
 our $Config_multi = qq{
-    lua_ssl_trusted_certificate ../../cert/_all.crt;
+    lua_ssl_trusted_certificate "$pwd/t/cert/_all.crt";
     server_tokens off;
 	location "/.well-known/admin/domain/test.example.com/config.json" {
 		# this will be called by the ssl server's `ssl_certificate_by_lua_block`
@@ -219,7 +221,7 @@ our $Config_multi = qq{
     }
 };
 our $Config_none = qq{
-    lua_ssl_trusted_certificate ../../cert/_all.crt;
+    lua_ssl_trusted_certificate "$pwd/t/cert/_all.crt";
     server_tokens off;
 	location "/.well-known/admin/domain/test.example.com/config.json" {
 		# this will be called by the ssl server's `ssl_certificate_by_lua_block`
@@ -268,7 +270,7 @@ our $Config_none = qq{
     }
 };
 our $Config_404 = qq{
-    lua_ssl_trusted_certificate ../../cert/_all.crt;
+    lua_ssl_trusted_certificate "$pwd/t/cert/_all.crt";
     server_tokens off;
 	location "/.well-known/admin/domain/test.example.com/config.json" {
 		# this will be called by the ssl server's `ssl_certificate_by_lua_block`
@@ -323,7 +325,8 @@ GET /t
 --- response_body
 connected: 1
 SSL handshake OK!
---- error_log
+--- error_log eval
+qq{
 [notice]
 peter_sslers.initialize
 peter_sslers.initialize_worker
@@ -335,12 +338,14 @@ cert_lrucache MISS for : test.example.com
 shared `cert_cache` MISS for : test.example.com
 UpstreamAPI: lookup enabled
 query_api_upstream : test.example.com
-querying upstream API server at: http://127.0.0.1:1984/.well-known/admin/domain/test.example.com/config.json?openresty=1
+querying upstream API server at: http://127.0.0.1:$ENV{TEST_NGINX_SERVER_PORT}/.well-known/admin/domain/test.example.com/config.json?openresty=1
 API response HIT for : test.example.com
 caching PEM cert & key into the shared cache : test.example.com
 caching cert & key cdata into the worker : test.example.com
 set ssl certificate : test.example.com
 set ssl private key : test.example.com
+}
+
 --- no_error_log
 Redis: lookup enabled
 
@@ -353,7 +358,8 @@ GET /t
 --- response_body
 connected: 1
 SSL handshake OK!
---- error_log
+--- error_log eval
+qq{
 [notice]
 peter_sslers.initialize
 peter_sslers.initialize_worker
@@ -365,12 +371,14 @@ cert_lrucache MISS for : test.example.com
 shared `cert_cache` MISS for : test.example.com
 UpstreamAPI: lookup enabled
 query_api_upstream : test.example.com
-querying upstream API server at: http://127.0.0.1:1984/.well-known/admin/domain/test.example.com/config.json?openresty=1
+querying upstream API server at: http://127.0.0.1:$ENV{TEST_NGINX_SERVER_PORT}/.well-known/admin/domain/test.example.com/config.json?openresty=1
 API response HIT for : test.example.com
 caching PEM cert & key into the shared cache : test.example.com
 caching cert & key cdata into the worker : test.example.com
 set ssl certificate : test.example.com
 set ssl private key : test.example.com
+}
+
 --- no_error_log
 Redis: lookup enabled
 
@@ -382,7 +390,8 @@ GET /t
 --- response_body
 connected: 1
 failed to do SSL handshake: certificate host mismatch
---- error_log
+--- error_log eval
+qq{
 [notice]
 peter_sslers.initialize
 peter_sslers.initialize_worker
@@ -394,8 +403,10 @@ cert_lrucache MISS for : test.example.com
 shared `cert_cache` MISS for : test.example.com
 UpstreamAPI: lookup enabled
 query_api_upstream : test.example.com
-querying upstream API server at: http://127.0.0.1:1984/.well-known/admin/domain/test.example.com/config.json?openresty=1
+querying upstream API server at: http://127.0.0.1:$ENV{TEST_NGINX_SERVER_PORT}/.well-known/admin/domain/test.example.com/config.json?openresty=1
 API response MISS for : test.example.com
+}
+
 --- no_error_log
 Redis: lookup enabled
 caching PEM cert & key into the shared cache : test.example.com
@@ -411,7 +422,8 @@ GET /t
 --- response_body
 connected: 1
 failed to do SSL handshake: certificate host mismatch
---- error_log
+--- error_log eval
+qq{
 [notice]
 peter_sslers.initialize
 peter_sslers.initialize_worker
@@ -423,8 +435,10 @@ cert_lrucache MISS for : test.example.com
 shared `cert_cache` MISS for : test.example.com
 UpstreamAPI: lookup enabled
 query_api_upstream : test.example.com
-querying upstream API server at: http://127.0.0.1:1984/.well-known/admin/domain/test.example.com/config.json?openresty=1
+querying upstream API server at: http://127.0.0.1:$ENV{TEST_NGINX_SERVER_PORT}/.well-known/admin/domain/test.example.com/config.json?openresty=1
 API response MISS for : test.example.com
+}
+
 --- no_error_log
 Redis: lookup enabled
 caching PEM cert & key into the shared cache : test.example.com

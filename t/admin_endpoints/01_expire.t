@@ -1,3 +1,6 @@
+use FindBin qw($Bin);
+use lib "$Bin/../lib";
+use PeterSSLers::TestConfig;
 use Test::Nginx::Socket 'no_plan';
 use Cwd qw(cwd);
 

@@ -1,3 +1,6 @@
+use FindBin qw($Bin);
+use lib "$Bin/../lib";
+use PeterSSLers::TestConfig;
 use Test::Nginx::Socket::Lua 'no_plan';
 use Cwd qw(cwd);
 
@@ -6,7 +9,6 @@ $ENV{TEST_NGINX_RESOLVER} ||= '1.1.1.1';
 $ENV{TEST_NGINX_PWD} ||= $pwd;
 $ENV{TEST_COVERAGE} ||= 0;
 $ENV{TEST_NGINX_HTML_DIR} ||= html_dir();
-$ENV{TEST_NGINX_SERVER_SSL_PORT} ||= 12345;
 
 $ENV{REDIS_HOST} ||= "127.0.0.1";
 $ENV{REDIS_PORT} ||= "6379";
@@ -78,8 +80,8 @@ our $HttpConfig_2 = qq{
             local enable_autocert = nil
             ssl_certhandler_set(redis_strategy, fallback_server, enable_autocert)
         }
-        ssl_certificate ../../cert/example.com.crt;  # fallback cert
-        ssl_certificate_key ../../cert/example.com.key;  # fallback key
+        ssl_certificate "$pwd/t/cert/example.com.crt";  # fallback cert
+        ssl_certificate_key "$pwd/t/cert/example.com.key";  # fallback key
         server_tokens off;
         location /actual-test {
             default_type 'text/plain';
@@ -89,7 +91,7 @@ our $HttpConfig_2 = qq{
     }
 };
 our $Config = qq{
-    lua_ssl_trusted_certificate ../../cert/_all.crt;
+    lua_ssl_trusted_certificate "$pwd/t/cert/_all.crt";
     server_tokens off;
     location /t {
         content_by_lua_block {
