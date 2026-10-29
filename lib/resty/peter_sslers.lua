@@ -59,6 +59,7 @@ local cert_cache_duration = 600
 local lru_cache_duration = 60
 local lru_maxitems = 200  -- allow up to 200 items in the cache
 local allowed_redis_strategy = {1, 2, }
+local backend_error_codes = {[401] = true, [403] = true, [429] = true}
 local redis_server = '127.0.0.1'
 local redis_port = '6379'
 local redis_db_number = 9
@@ -161,8 +162,8 @@ local function api_response_to_cert(server_name, response, cert_preferences)
     -- A 200 is authoritative only after validating its certificate fields.
     -- Decode/schema errors must not suppress a later successful lookup.
     certificate_pem.transient = not response or response.status ~= 404
-    certificate_pem.backend_failure = not response or response.status == 401 or response.status == 403
-        or response.status == 429 or (type(response.status) == 'number' and response.status >= 500)
+    certificate_pem.backend_failure = not response or backend_error_codes[response.status] == true
+        or (type(response.status) == 'number' and response.status >= 500)
 
     if not response then
         ngx_log(ngx_ERR, 'API response - no response : ', server_name)
