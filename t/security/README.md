@@ -100,3 +100,7 @@ After successful tests, the runner checks that its exclusive plaintext and
 authenticated instances have no fixture keys left in databases 8 and 9. It
 asserts cleanup rather than hiding leaks with a database flush. Secure CI runs
 the parallel-fixture check for both backends.
+
+The coverage job builds LuaRocks 3.13.0 from its release tarball using the
+OpenResty image's LuaJIT prefix and headers, matching the upstream alpine-fat
+build. It does not invoke the bundled LuaRocks to bootstrap its replacement.

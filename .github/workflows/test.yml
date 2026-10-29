@@ -68,10 +68,20 @@ jobs:
       # Bootstrap directly: old LuaRocks cannot parse large manifests under LuaJIT.
       # https://github.com/luarocks/luarocks/issues/1797
       run: |
-        curl --fail --location --retry 3 -o /tmp/luarocks.src.rock https://luarocks.org/luarocks-3.13.0-1.src.rock
-        luarocks install /tmp/luarocks.src.rock
-        luarocks --version
-        luarocks install luacov
+        build_dir=$(mktemp -d)
+        curl --fail --location --retry 3 -o "$build_dir/luarocks.tar.gz" https://luarocks.github.io/luarocks/releases/luarocks-3.13.0.tar.gz
+        tar -xzf "$build_dir/luarocks.tar.gz" -C "$build_dir"
+        (
+          cd "$build_dir/luarocks-3.13.0"
+          ./configure \
+            --prefix=/usr/local/openresty/luajit \
+            --with-lua=/usr/local/openresty/luajit \
+            --with-lua-include=/usr/local/openresty/luajit/include/luajit-2.1
+          make build
+          make install
+        )
+        /usr/local/openresty/luajit/bin/luarocks --version
+        /usr/local/openresty/luajit/bin/luarocks install luacov
 
     - uses: actions/checkout@v6
 
