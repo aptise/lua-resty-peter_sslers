@@ -426,7 +426,9 @@ local function get_redcon()
     -- Change the redis DB to the port
     -- We only have to do this on new connections
     local times, err = redcon:get_reused_times()
-    if err then
+    if err or type(times) ~= 'number' or times < 0 then
+        err = err or 'invalid connection reuse count'
+        if redcon.close then redcon:close() end
         ngx_log(ngx_ERR, "Redis: failed to detect times: ", err)
         return nil, err
     end
@@ -456,122 +458,73 @@ local function redis_keepalive(redcon)
 end
 
 
+-- HMGET returns an array for both hits and misses, false on a Redis error,
+-- and nil on a transport error. Only an all-null array is a clean miss.
+local function redis_domain_data(redcon, key_domain, ...)
+    local data, err = redcon:hmget(key_domain, ...)
+    if err or type(data) ~= 'table' then
+        err = err or 'invalid HMGET response'
+        ngx_log(ngx_ERR, 'Redis: failed to query domain(', key_domain, ') Err: ', err)
+        return nil, err
+    end
+    local count = select('#', ...)
+    local all_missing = true
+    for index = 1, count do
+        if data[index] ~= ngx_null then all_missing = false end
+    end
+    if all_missing then return nil end
+    for index = 1, count do
+        if type(data[index]) ~= 'string' then
+            err = 'incomplete or invalid Redis domain fields'
+            ngx_log(ngx_ERR, 'Redis: ', err, ' for domain(', key_domain, ')')
+            return nil, err
+        end
+    end
+    return data
+end
+
+
+local function redis_certificate_part(redcon, key)
+    local value, err = redcon:get(key)
+    if err or type(value) ~= 'string' then
+        err = err or 'missing or invalid Redis certificate part'
+        ngx_log(ngx_ERR, 'Redis: failed to retrieve part(', key, ') Err: ', err)
+        return nil, err
+    end
+    return value
+end
+
+
 local function prime_1__query_redis(redcon, _server_name)
-    -- returns `certificate_pairing()` or `nil`
-    -- If the cert isn't in the cache, attept to retrieve from Redis
+    -- Return a pair, a clean miss (nil), or a retryable failure (nil, err).
     ngx_log(ngx_DEBUG, "Redis: prime_1__query_redis : ", _server_name)
-    local key_domain = "d1:" .. _server_name
-    local domain_data, err = redcon:hmget(key_domain, 'c', 'p', 'i')
-    if domain_data == nil then
-        ngx_log(ngx_DEBUG,
-            "Redis: `nil` failed to retreive certificates for domain(",
-            key_domain, ") Err: ", err
-        )
-        return nil
-    end
-    if domain_data == ngx_null then
-        ngx_log(ngx_DEBUG,
-            "Redis: `ngx_null` failed to retreive certificates for domain(",
-            key_domain, ") Err: ", err
-        )
-        return nil
-    end
-    -- ngx_log(ngx_DEBUG, 'err ', err)
-    -- ngx_log(ngx_DEBUG, 'domain_data ', tostring(domain_data))
+    local domain_data, err = redis_domain_data(redcon, 'd1:' .. _server_name, 'c', 'p', 'i')
+    if not domain_data then return nil, err end
 
-    -- lua arrays are 1 based!
-    local id_cert = domain_data[1]
-    local id_pkey = domain_data[2]
-    local id_cacertchain = domain_data[3]
-
-    -- conditional logging
-    -- ngx_log(ngx_DEBUG, "prime_1__query_redis")
-    -- ngx_log(ngx_DEBUG, "id_cert ", id_cert)
-    -- ngx_log(ngx_DEBUG, "id_pkey ", id_pkey)
-    -- ngx_log(ngx_DEBUG, "id_cacertchain ", id_cacertchain)
-
-    if id_cert == ngx_null or id_pkey == ngx_null or id_cacertchain == ngx_null then
-        ngx_log(ngx_ERR,
-            "Redis: `id_cert == ngx_null or id_pkey == ngx_null or " ..
-            "id_cacertchain == ngx_null for domain(", key_domain, ")"
-        )
-        return nil
-    end
-
-    -- scoping
     local pkey, cert, cacertchain
-
-    pkey, err = redcon:get('p:' .. id_pkey)
-    if pkey == nil or pkey == ngx_null then
-        ngx_log(ngx_ERR,
-            "Redis: failed to retreive pkey (", id_pkey, ") for domain (",
-            key_domain, ") Err: ", err
-        )
-        return nil
-    end
-
-    cert, err = redcon:get('c:' .. id_cert)
-    if cert == nil or cert == ngx_null then
-        ngx_log(ngx_ERR,
-            "Redis: failed to retreive certificate (", id_cert,
-            ") for domain (", key_domain, ") Err: ", err
-        )
-        return nil
-    end
-
-    cacertchain, err = redcon:get('i:' .. id_cacertchain)
-    if cacertchain == nil or cacertchain == ngx_null then
-        ngx_log(ngx_ERR,
-            "Redis: failed to retreive ca certificate (", id_cacertchain,
-            ") for domain (", key_domain, ") Err: ", err
-        )
-        return nil
-    end
+    pkey, err = redis_certificate_part(redcon, 'p:' .. domain_data[2])
+    if not pkey then return nil, err end
+    cert, err = redis_certificate_part(redcon, 'c:' .. domain_data[1])
+    if not cert then return nil, err end
+    cacertchain, err = redis_certificate_part(redcon, 'i:' .. domain_data[3])
+    if not cacertchain then return nil, err end
 
     local certificate_pem = certificate_pairing()
-          certificate_pem['cert'] = cert .. "\n" .. cacertchain
-          certificate_pem['pkey'] = pkey
+    certificate_pem.cert = cert .. "\n" .. cacertchain
+    certificate_pem.pkey = pkey
     return certificate_pem
 end
 
 
 local function prime_2__query_redis(redcon, _server_name)
-    -- returns `certificate_pairing()` or `nil`
-    -- If the cert isn't in the cache, attept to retrieve from Redis
-    ngx_log(ngx_DEBUG,
-        "Redis: prime_2__query_redis : ", _server_name
-    )
-    local key_domain = "d2:" .. _server_name
-    local domain_data, err = redcon:hmget(key_domain, 'p', 'f')
-    if domain_data == nil then
-        ngx_log(ngx_DEBUG,
-            "Redis: `nil` failed to retreive certificates " ..
-            "for domain(", key_domain, ") Err: ", err
-        )
-        return nil
-    end
-    if domain_data == ngx_null then
-        ngx_log(ngx_DEBUG,
-            "Redis: `ngx_null` failed to retreive certificates for domain(",
-            key_domain, ") Err: ", err
-        )
-        return nil
-    end
-
-    local pkey = domain_data[1]
-    local fullchain = domain_data[2]
-
-    if pkey == ngx_null or fullchain == ngx_null then
-        ngx_log(ngx_DEBUG,
-            "Redis: `pkey == ngx_null or fullchain == ngx_null for domain(",
-            key_domain, ")"
-        )
-        return nil
-    end
+    -- Return a pair, a clean miss (nil), or a retryable failure (nil, err).
+    ngx_log(ngx_DEBUG, "Redis: prime_2__query_redis : ", _server_name)
+    local domain_data, err = redis_domain_data(redcon, 'd2:' .. _server_name, 'p', 'f')
+    if not domain_data then return nil, err end
 
     local certificate_pem = certificate_pairing()
-          certificate_pem['cert'] = fullchain
-          certificate_pem['pkey'] = pkey
+    certificate_pem.cert = domain_data[2]
+    certificate_pem.pkey = domain_data[1]
     return certificate_pem
 end
 
@@ -765,12 +718,18 @@ local function set_ssl_certificate(
                 else
                     -- actually query redis
                     if redis_strategy == 1 then
-                        certificate_pem = prime_1__query_redis(redcon, server_name)
+                        certificate_pem, err = prime_1__query_redis(redcon, server_name)
                     elseif redis_strategy == 2 then
-                        certificate_pem = prime_2__query_redis(redcon, server_name)
+                        certificate_pem, err = prime_2__query_redis(redcon, server_name)
                     end
-                    -- return the redcon to the connection pool
-                    redis_keepalive(redcon)
+                    if err then
+                        transient = true
+                        -- A failed command may leave an unusable socket; do not
+                        -- return it to the keepalive pool.
+                        redcon:close()
+                    else
+                        redis_keepalive(redcon)
+                    end
                 end
             end
 
