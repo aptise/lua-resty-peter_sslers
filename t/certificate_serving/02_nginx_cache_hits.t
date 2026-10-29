@@ -1,3 +1,6 @@
+use FindBin qw($Bin);
+use lib "$Bin/../lib";
+use PeterSSLers::TestConfig;
 use Test::Nginx::Socket::Lua 'no_plan';
 use Cwd qw(cwd);
 
@@ -6,12 +9,12 @@ $ENV{TEST_NGINX_RESOLVER} ||= '1.1.1.1';
 $ENV{TEST_NGINX_PWD} ||= $pwd;
 $ENV{TEST_COVERAGE} ||= 0;
 $ENV{TEST_NGINX_HTML_DIR} ||= html_dir();
-$ENV{TEST_NGINX_SERVER_SSL_PORT} ||= 12345;
 
 our $HttpConfig_1 = qq{
     lua_package_path "$pwd/lib/?.lua;;";
     error_log logs/error.log debug;
     lua_shared_dict  cert_cache 100k;
+    lua_shared_dict cert_cache_ipc 100k;
     lua_code_cache  on;
     init_by_lua_block {
         require "resty.core"
@@ -57,8 +60,8 @@ our $HttpConfig_1 = qq{
             local enable_autocert = nil
             ssl_certhandler_set(redis_strategy, fallback_server, enable_autocert)
         }
-        ssl_certificate ../../cert/example.com.crt;  # fallback cert
-        ssl_certificate_key ../../cert/example.com.key;  # fallback key
+        ssl_certificate "$pwd/t/cert/example.com.crt";  # fallback cert
+        ssl_certificate_key "$pwd/t/cert/example.com.key";  # fallback key
         server_tokens off;
         location /actual-test {
             default_type 'text/plain';
@@ -71,6 +74,7 @@ our $HttpConfig_2 = qq{
     lua_package_path "$pwd/lib/?.lua;;";
     error_log logs/error.log debug;
     lua_shared_dict  cert_cache 100k;
+    lua_shared_dict cert_cache_ipc 100k;
     lua_code_cache  on;
     init_by_lua_block {
         require "resty.core"
@@ -92,6 +96,8 @@ our $HttpConfig_2 = qq{
         certificate_pem['pkey'] = f:read("*all")
         f:close()           
         ssl_certhandler.set_cert_sharedcache("test.example.com", certificate_pem)
+        -- Recreate L1 so the following handshake genuinely exercises L2.
+        ssl_certhandler.initialize_worker(600, 60, 200)
     }
     server {
         listen unix:$ENV{TEST_NGINX_HTML_DIR}/nginx.sock ssl;
@@ -111,8 +117,8 @@ our $HttpConfig_2 = qq{
             local enable_autocert = nil
             ssl_certhandler_set(redis_strategy, fallback_server, enable_autocert)
         }
-        ssl_certificate ../../cert/example.com.crt;  # fallback cert
-        ssl_certificate_key ../../cert/example.com.key;  # fallback key
+        ssl_certificate "$pwd/t/cert/example.com.crt";  # fallback cert
+        ssl_certificate_key "$pwd/t/cert/example.com.key";  # fallback key
         server_tokens off;
         location /actual-test {
             default_type 'text/plain';
@@ -122,7 +128,7 @@ our $HttpConfig_2 = qq{
     }
 };
 our $Config = qq{
-    lua_ssl_trusted_certificate ../../cert/_all.crt;
+    lua_ssl_trusted_certificate "$pwd/t/cert/_all.crt";
     server_tokens off;
     location /t {
         content_by_lua_block {

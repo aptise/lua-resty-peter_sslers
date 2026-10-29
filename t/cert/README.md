@@ -27,5 +27,18 @@ These Certificates and Keys are used for tests.
 * _all.crt
   * all certificates
   * used for `lua_ssl_trusted_certificate` in tests
-  * `cat example.com.crt test.example.com.crt  > _all.crt`
+  * `cat example.com.crt test.example.com.crt wildcard.test.example.com.crt > _all.crt`
   
+
+* wildcard.test.example.com.crt + wildcard.test.example.com.key
+  * self-signed test identity covering `*.test.example.com` through a SAN
+  * permits unique run/worker SNI names while keeping TLS hostname verification enabled
+  * included in `_all.crt` for client verification in the integration suite
+  * generated for tests with:
+
+    ```sh
+    openssl req -x509 -newkey rsa:2048 -nodes -days 36500 \
+        -subj '/CN=*.test.example.com' \
+        -addext 'subjectAltName=DNS:*.test.example.com' \
+        -keyout wildcard.test.example.com.key -out wildcard.test.example.com.crt
+    ```

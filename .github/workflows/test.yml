@@ -8,15 +8,20 @@ on:
     paths-ignore: # Skip if only docs are updated
         - '*.md'
 
+permissions:
+  contents: read
+
 jobs:
   luacheck:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v2
-    - uses: leafo/gh-actions-lua@v8
+    - uses: actions/checkout@v6
+    - uses: leafo/gh-actions-lua@v13
       with:
         luaVersion: "luajit-openresty"
-    - uses: leafo/gh-actions-luarocks@v4
+    - uses: leafo/gh-actions-luarocks@v6
+      with:
+        luaRocksVersion: "3.13.0"
     - run: luarocks install luacheck
     - run: luacheck lib --no-unused
 
@@ -24,8 +29,8 @@ jobs:
     strategy:
       matrix:
         openresty_version:
-          - 1.17.8.1
-          - 1.19.3.1
+          - 1.29.2.4
+          - 1.31.1.1
 
     runs-on: ubuntu-latest
 
@@ -42,27 +47,43 @@ jobs:
       run: |
         apk add --no-cache curl perl bash wget git perl-dev libarchive-tools redis
         ln -s /usr/bin/bsdtar /usr/bin/tar
-        opm get ledgetech/lua-resty-http
+        opm get ledgetech/lua-resty-http thibaultcha/lua-resty-mlcache fffonion/lua-resty-openssl
         /usr/bin/redis-server /etc/redis.conf &
 
     - name: Install CPAN
-      run: curl -s -L http://xrl.us/cpanm > /bin/cpanm && chmod +x /bin/cpanm
+      run: PERL_MM_USE_DEFAULT=1 cpan App::cpanminus
 
     - name: Cache
-      uses: actions/cache@v2
+      uses: actions/cache@v5
       with:
         path: |
           ~/.cpan
           ~/.cache
-        key: ${{ runner.os }}-${{ matrix.openresty_version }}-cache
+        key: ${{ runner.os }}-${{ matrix.openresty_version }}-luarocks-3.13.0-cache
 
     - name: Install Test::Nginx
       run: cpanm -q -n Test::Nginx
 
     - name: Install Luacov
-      run: luarocks install luacov
+      # Bootstrap directly: old LuaRocks cannot parse large manifests under LuaJIT.
+      # https://github.com/luarocks/luarocks/issues/1797
+      run: |
+        build_dir=$(mktemp -d)
+        curl --fail --location --retry 3 -o "$build_dir/luarocks.tar.gz" https://luarocks.github.io/luarocks/releases/luarocks-3.13.0.tar.gz
+        tar -xzf "$build_dir/luarocks.tar.gz" -C "$build_dir"
+        (
+          cd "$build_dir/luarocks-3.13.0"
+          ./configure \
+            --prefix=/usr/local/openresty/luajit \
+            --with-lua=/usr/local/openresty/luajit \
+            --with-lua-include=/usr/local/openresty/luajit/include/luajit-2.1
+          make build
+          make install
+        )
+        /usr/local/openresty/luajit/bin/luarocks --version
+        /usr/local/openresty/luajit/bin/luarocks install luacov
 
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v6
 
     - name: Run tests
       env:
@@ -74,3 +95,45 @@ jobs:
       run: |
         luacov
         tail -n 8 luacov.report.out
+
+  secure_backends:
+    name: Secure ${{ matrix.backend }} connections
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        backend: [valkey, redis]
+    container:
+      image: openresty/openresty:1.31-alpine-fat
+      options: --init
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install secure test dependencies
+        run: |
+          apk add --no-cache python3 openssl perl perl-dev make ${{ matrix.backend }}
+          opm get ledgetech/lua-resty-http thibaultcha/lua-resty-mlcache fffonion/lua-resty-openssl
+          PERL_MM_USE_DEFAULT=1 cpan App::cpanminus
+          cpanm -n Test::Nginx
+      - name: Build Redis with TLS enabled
+        if: matrix.backend == 'redis'
+        run: |
+          apk add --no-cache build-base openssl-dev curl
+          redis_version=$(redis-server --version | sed -n 's/.*v=\([^ ]*\).*/\1/p')
+          test -n "$redis_version"
+          build_dir=$(mktemp -d)
+          curl --fail --location --retry 3 -o "$build_dir/redis.tar.gz" "https://download.redis.io/releases/redis-$redis_version.tar.gz"
+          tar -xzf "$build_dir/redis.tar.gz" -C "$build_dir"
+          make -C "$build_dir/redis-$redis_version" -j2 BUILD_TLS=yes MALLOC=libc BUILD_WITH_MODULES=no redis-server
+          mkdir -p /opt/sslers-redis/bin
+          install -m755 "$build_dir/redis-$redis_version/src/redis-server" /opt/sslers-redis/bin/redis-server
+          echo /opt/sslers-redis/bin >> "$GITHUB_PATH"
+      - name: Enable Alpine Valkey TLS module
+        if: matrix.backend == 'valkey'
+        run: |
+          apk add --no-cache valkey-tls
+          tls_module=$(apk info -L valkey-tls | awk '/\.so$/ {print "/" $0}')
+          test -f "$tls_module"
+          echo "VALKEY_TLS_MODULE=$tls_module" >> "$GITHUB_ENV"
+      - name: Test isolated password, TLS, and mTLS connections
+        env:
+          TEST_NGINX_NO_SHUFFLE: '1'
+        run: python3 t/security/run.py --backend ${{ matrix.backend }} --full-suite --parallel-fixtures 2

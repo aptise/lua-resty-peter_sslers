@@ -1,12 +1,14 @@
+use FindBin qw($Bin);
+use lib "$Bin/../lib";
+use PeterSSLers::TestConfig;
 use Test::Nginx::Socket::Lua 'no_plan';
 use Cwd qw(cwd);
 
 my $pwd = cwd();
-$ENV{TEST_NGINX_RESOLVER} ||= '1.1.1.1';
+$ENV{TEST_NGINX_RESOLVER} ||= '127.0.0.1:1';
 $ENV{TEST_NGINX_PWD} ||= $pwd;
 $ENV{TEST_COVERAGE} ||= 0;
 $ENV{TEST_NGINX_HTML_DIR} ||= html_dir();
-$ENV{TEST_NGINX_SERVER_SSL_PORT} ||= 12345;
 
 $ENV{REDIS_HOST} ||= "127.0.0.1";
 $ENV{REDIS_PORT} ||= "6379";
@@ -22,16 +24,13 @@ $ENV{REDIS_PORT} ||= "6379";
 #
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-# also
-# we may end up with a redcon, but invald
-# if that is the case, the response is
-# 	xx Redis: failed to connect to redis: 
-# 	++ Redis: failed to detect times:
+# Connection failures must be reported before querying connection reuse state.
 
 our $HttpConfig_GoodIp_BadRedisPort = qq{
     lua_package_path "$pwd/lib/?.lua;;";
     error_log logs/error.log debug;
     lua_shared_dict  cert_cache 100k;
+    lua_shared_dict cert_cache_ipc 100k;
     lua_code_cache  on;
     init_by_lua_block {
         require "resty.core"
@@ -48,6 +47,7 @@ our $HttpConfig_GoodIp_BadRedisPort = qq{
         listen unix:$ENV{TEST_NGINX_HTML_DIR}/nginx.sock ssl;
         server_name example.com;  # fallback domain
         resolver $ENV{TEST_NGINX_RESOLVER};
+        resolver_timeout 100ms;
         ssl_certificate_by_lua_block  {
             ngx.log(ngx.DEBUG, "server: ssl_certhandler")
 
@@ -66,8 +66,8 @@ our $HttpConfig_GoodIp_BadRedisPort = qq{
             local enable_autocert = nil
             ssl_certhandler_set(redis_strategy, fallback_server, enable_autocert)
         }
-        ssl_certificate ../../cert/example.com.crt;  # fallback cert
-        ssl_certificate_key ../../cert/example.com.key;  # fallback key
+        ssl_certificate "$pwd/t/cert/example.com.crt";  # fallback cert
+        ssl_certificate_key "$pwd/t/cert/example.com.key";  # fallback key
         server_tokens off;
         location /actual-test {
             default_type 'text/plain';
@@ -80,6 +80,7 @@ our $HttpConfig_BadRedisHostname = qq{
     lua_package_path "$pwd/lib/?.lua;;";
     error_log logs/error.log debug;
     lua_shared_dict  cert_cache 100k;
+    lua_shared_dict cert_cache_ipc 100k;
     lua_code_cache  on;
     init_by_lua_block {
         require "resty.core"
@@ -96,6 +97,7 @@ our $HttpConfig_BadRedisHostname = qq{
         listen unix:$ENV{TEST_NGINX_HTML_DIR}/nginx.sock ssl;
         server_name example.com;  # fallback domain
         resolver $ENV{TEST_NGINX_RESOLVER};
+        resolver_timeout 100ms;
         ssl_certificate_by_lua_block  {
             ngx.log(ngx.DEBUG, "server: ssl_certhandler")
 
@@ -114,8 +116,8 @@ our $HttpConfig_BadRedisHostname = qq{
             local enable_autocert = nil
             ssl_certhandler_set(redis_strategy, fallback_server, enable_autocert)
         }
-        ssl_certificate ../../cert/example.com.crt;  # fallback cert
-        ssl_certificate_key ../../cert/example.com.key;  # fallback key
+        ssl_certificate "$pwd/t/cert/example.com.crt";  # fallback cert
+        ssl_certificate_key "$pwd/t/cert/example.com.key";  # fallback key
         server_tokens off;
         location /actual-test {
             default_type 'text/plain';
@@ -125,7 +127,7 @@ our $HttpConfig_BadRedisHostname = qq{
     }
 };
 our $Config = qq{
-    lua_ssl_trusted_certificate ../../cert/_all.crt;
+    lua_ssl_trusted_certificate "$pwd/t/cert/_all.crt";
     server_tokens off;
     location /t {
         content_by_lua_block {
@@ -176,7 +178,7 @@ cert_lrucache MISS for : test.example.com
 shared `cert_cache` MISS for : test.example.com
 Redis: lookup enabled
 Redis: about to connect to redis: 127.0.0.1:1
-Redis: failed to detect times:
+Redis: failed to connect to redis:
 Redis: could not get connection
 failed to retrieve PEM for : test.example.com
 unable to provide ssl for : test.example.com
@@ -201,7 +203,7 @@ cert_lrucache MISS for : test.example.com
 shared `cert_cache` MISS for : test.example.com
 Redis: lookup enabled
 Redis: about to connect to redis: nxdomain.example.com
-Redis: failed to detect times:
+Redis: failed to connect to redis:
 Redis: could not get connection
 failed to retrieve PEM for : test.example.com
 unable to provide ssl for : test.example.com
